@@ -61,7 +61,7 @@ internal enum AppDefaults {
             Keys.maxModelStorageGB: 5.0,
             Keys.enableSmartPaste: false,
             Keys.immediateRecording: false,
-            Keys.globalHotkey: "⌘⇧Space",
+            Keys.globalHotkey: "F13",
 
             Keys.pressAndHoldEnabled: PressAndHoldConfiguration.defaults.enabled,
             Keys.pressAndHoldKeyIdentifier: PressAndHoldConfiguration.defaults.key.rawValue,

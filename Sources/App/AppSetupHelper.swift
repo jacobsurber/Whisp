@@ -11,7 +11,6 @@ internal class AppSetupHelper {
         }
         setupLoginItem()
         ensurePromptFiles()
-        cleanupOldTemporaryFiles()
     }
     
     static func setupLoginItem() {
@@ -150,29 +149,7 @@ internal class AppSetupHelper {
         return false
     }
     
-    static func cleanupOldTemporaryFiles() {
-        let tempDirectory = FileManager.default.temporaryDirectory
-        
-        do {
-            let files = try FileManager.default.contentsOfDirectory(at: tempDirectory, includingPropertiesForKeys: [.creationDateKey], options: [])
-            let audioFiles = files.filter { $0.lastPathComponent.hasPrefix("recording_") && $0.pathExtension == "m4a" }
-            
-            let cutoffDate = Date().addingTimeInterval(-24 * 60 * 60) // 24 hours ago
-            
-            for file in audioFiles {
-                do {
-                    let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-                    if let creationDate = attributes[.creationDate] as? Date, creationDate < cutoffDate {
-                        try FileManager.default.removeItem(at: file)
-                    }
-                } catch {
-                    Logger.app.error("Failed to clean up file \(file.lastPathComponent): \(error.localizedDescription)")
-                }
-            }
-        } catch {
-            Logger.app.error("Failed to clean up temporary files: \(error.localizedDescription)")
-        }
-    }
+    // Removed: cleanupOldTemporaryFiles() - no longer needed since audio files are deleted immediately after transcription
 
     // MARK: - Prompt Files
     /// Ensure default prompt files exist for advanced customization

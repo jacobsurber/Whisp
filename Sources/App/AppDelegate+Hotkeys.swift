@@ -51,7 +51,8 @@ internal extension AppDelegate {
         }
 
         if !recorder.hasPermission {
-            showRecordingWindowForProcessing()
+            // Show permission prompt but don't open window
+            NotificationCenter.default.post(name: .recordingStartFailed, object: nil)
             return
         }
 
@@ -61,32 +62,122 @@ internal extension AppDelegate {
             SoundManager().playRecordingStartSound()
         } else {
             isHoldRecordingActive = false
-            showRecordingWindowForProcessing {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    NotificationCenter.default.post(
-                        name: .recordingStartFailed,
-                        object: nil
-                    )
-                }
-            }
+            // Silent failure - just don't start recording
+            Logger.app.warning("Failed to start recording from press-and-hold")
         }
     }
 
     private func stopRecordingFromPressAndHold() {
-        guard isHoldRecordingActive else { return }
-        guard let recorder = audioRecorder, recorder.isRecording else {
+        Logger.app.debug("stopRecordingFromPressAndHold called")
+
+        guard isHoldRecordingActive else {
+            Logger.app.debug("Not active, returning")
+            return
+        }
+
+        guard let recorder = audioRecorder else {
+            Logger.app.error("No audioRecorder available")
             isHoldRecordingActive = false
             return
         }
 
-        isHoldRecordingActive = false
-        updateMenuBarIcon(isRecording: false)
+        guard recorder.isRecording else {
+            Logger.app.error("Recorder not recording")
+            isHoldRecordingActive = false
+            return
+        }
 
-        showRecordingWindowForProcessing {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                NotificationCenter.default.post(name: .spaceKeyPressed, object: nil)
+        Logger.app.debug("Starting stop sequence...")
+        isHoldRecordingActive = false
+
+        // Keep recording animation running during transcription
+        // (icon will reset to idle when transcription completes)
+
+        // Post notification that recording stopped
+        NotificationCenter.default.post(name: .recordingStopped, object: nil)
+        NotificationCenter.default.post(name: .transcriptionStarted, object: nil)
+
+        Logger.app.debug("About to stop recording...")
+
+        // Get audio URL from recorder
+        guard let audioURL = recorder.stopRecording() else {
+            Logger.app.error("Failed to get audio URL from recorder")
+            resetToIdleState()
+            return
+        }
+
+        Logger.app.debug("Got audio URL: \(audioURL.path)")
+        let sessionDuration = recorder.lastRecordingDuration
+        Logger.app.debug("Session duration: \(sessionDuration ?? 0)")
+
+        // Get source app info for history tracking
+        let sourceAppInfo = currentSourceAppInfo()
+        Logger.app.debug("Source app: \(sourceAppInfo.displayName)")
+
+        // Process transcription directly - NO window needed!
+        Logger.app.debug("Creating transcription task...")
+        Task { @MainActor in
+            do {
+                Logger.app.debug("Inside transcription task")
+                let coordinator = TranscriptionCoordinator.shared
+
+                // Set progress handler to update menu bar (optional)
+                coordinator.progressHandler = { [weak self] message in
+                    Logger.app.debug("Transcription progress: \(message)")
+                }
+
+                Logger.app.debug("Calling processRecording...")
+                let text = try await coordinator.processRecording(
+                    audioURL: audioURL,
+                    sessionDuration: sessionDuration,
+                    sourceAppInfo: sourceAppInfo,
+                    shouldPaste: true  // Auto-paste if Smart Paste enabled
+                )
+
+                Logger.app.debug("Transcription completed, playing sound...")
+                // Play completion sound
+                SoundManager().playCompletionSound()
+
+                // Reset menu bar to idle state
+                resetToIdleState()
+
+                // Post notification that transcription completed
+                NotificationCenter.default.post(name: .transcriptionCompleted, object: nil)
+
+                Logger.app.info("Background transcription completed: \(text.prefix(50))...")
+            } catch {
+                Logger.app.error("Transcription failed: \(error.localizedDescription)")
+
+                // Reset menu bar to idle state even on error
+                resetToIdleState()
+
+                // Post notification that transcription completed (with error)
+                NotificationCenter.default.post(name: .transcriptionCompleted, object: nil)
+
+                // Show error alert (user-visible)
+                DispatchQueue.main.async {
+                    ErrorPresenter.shared.showError("Transcription failed: \(error.localizedDescription)")
+                }
             }
         }
+
+        Logger.app.debug("stopRecordingFromPressAndHold completed")
+    }
+
+    private func currentSourceAppInfo() -> SourceAppInfo {
+        // Get the frontmost app that's not VoiceFlow
+        if let frontmostApp = NSWorkspace.shared.frontmostApplication,
+           frontmostApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+            return SourceAppInfo.from(app: frontmostApp) ?? SourceAppInfo.unknown
+        }
+
+        // Fallback to runningApplications
+        let apps = NSWorkspace.shared.runningApplications
+        for app in apps where app.isActive && app.bundleIdentifier != Bundle.main.bundleIdentifier {
+            return SourceAppInfo.from(app: app) ?? SourceAppInfo.unknown
+        }
+
+        return SourceAppInfo.unknown
     }
 
     func handleHotkey(source: HotkeyTriggerSource) {
@@ -146,12 +237,12 @@ internal extension AppDelegate {
     }
 
     private func startRecordingAnimation() {
-        guard let button = statusItem?.button else { return }
+        guard let button = statusItem?.button else {
+            Logger.app.error("Cannot start recording animation: button is nil")
+            return
+        }
 
         stopRecordingAnimation()
-
-        // Record start time for elapsed time display
-        recordingStartTime = Date()
 
         let iconSize = AppSetupHelper.getAdaptiveMenuBarIconSize()
         let config = NSImage.SymbolConfiguration(pointSize: iconSize, weight: .medium)
@@ -180,52 +271,24 @@ internal extension AppDelegate {
         // WhisperFlow-inspired 400ms animation cycle
         timer.schedule(deadline: .now(), repeating: 0.4)
 
-        timer.setEventHandler { [weak button] in
-            guard let button = button else { return }
+        timer.setEventHandler { [weak self] in
+            // Access button through statusItem to ensure it's always current
+            guard let strongSelf = self, let currentButton = strongSelf.statusItem?.button else { return }
 
             isPulseState.toggle()
 
             Task { @MainActor in
-                button.image = isPulseState ? indigoOutlineImage : dimmedOutlineImage
+                currentButton.image = isPulseState ? indigoOutlineImage : dimmedOutlineImage
             }
         }
 
         recordingAnimationTimer = timer
         timer.resume()
-
-        // Start elapsed time timer
-        startElapsedTimeTimer()
     }
 
     private func stopRecordingAnimation() {
         recordingAnimationTimer?.cancel()
         recordingAnimationTimer = nil
-        stopElapsedTimeTimer()
-        recordingStartTime = nil
-    }
-
-    private func startElapsedTimeTimer() {
-        guard let button = statusItem?.button else { return }
-
-        // Update elapsed time every second
-        elapsedTimeTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self, weak button] _ in
-            guard let self = self, let button = button, let startTime = self.recordingStartTime else { return }
-
-            let elapsed = Date().timeIntervalSince(startTime)
-            let minutes = Int(elapsed) / 60
-            let seconds = Int(elapsed) % 60
-            let timeString = String(format: " %d:%02d", minutes, seconds)
-
-            button.title = timeString
-        }
-    }
-
-    private func stopElapsedTimeTimer() {
-        elapsedTimeTimer?.invalidate()
-        elapsedTimeTimer = nil
-
-        // Clear the elapsed time display
-        statusItem?.button?.title = ""
     }
 
     @objc func onRecordingStopped() {
@@ -233,64 +296,33 @@ internal extension AppDelegate {
     }
 
     @objc func onTranscriptionStarted() {
-        showProcessingState()
+        // No-op: keep recording animation running
     }
 
     @objc func onTranscriptionCompleted() {
         resetToIdleState()
     }
 
-    private func showProcessingState() {
-        guard let button = statusItem?.button else { return }
-
+    private func resetToIdleState() {
         stopRecordingAnimation()
 
-        let iconSize = AppSetupHelper.getAdaptiveMenuBarIconSize()
-        let config = NSImage.SymbolConfiguration(pointSize: iconSize, weight: .medium)
-
-        // WhisperFlow-inspired indigo/purple color for processing
-        let indigoColor = NSColor(red: 0.39, green: 0.40, blue: 0.95, alpha: 1.0)
-
-        // Use a spinner/progress icon
-        let processingImage = NSImage(systemSymbolName: "circle.dotted", accessibilityDescription: "Processing")?.withSymbolConfiguration(config)
-        processingImage?.isTemplate = false
-        let tintedImage = processingImage?.tinted(with: indigoColor)
-
-        button.image = tintedImage
-        button.title = " ..."
-
-        // Animate the spinner with rotation (simulated with icon swap)
-        let queue = DispatchQueue(label: "com.voiceflow.processing", qos: .background)
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-
-        // Rotate through different spinner states every 200ms
-        let spinnerIcons = ["circle.dotted", "circle.dotted.circle", "circle.dotted.and.circle"]
-        var iconIndex = 0
-
-        timer.schedule(deadline: .now(), repeating: 0.2)
-
-        timer.setEventHandler { [weak button] in
-            guard let button = button else { return }
-
-            iconIndex = (iconIndex + 1) % spinnerIcons.count
-            let nextIcon = NSImage(systemSymbolName: spinnerIcons[iconIndex], accessibilityDescription: "Processing")?.withSymbolConfiguration(config)
-            nextIcon?.isTemplate = false
-            let nextTintedImage = nextIcon?.tinted(with: indigoColor)
-
-            Task { @MainActor in
-                button.image = nextTintedImage
+        // Ensure statusItem exists
+        if statusItem == nil {
+            Logger.app.error("statusItem is nil! Recreating...")
+            statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            if let button = statusItem?.button {
+                button.action = #selector(toggleRecordWindow)
+                button.target = self
             }
         }
 
-        recordingAnimationTimer = timer
-        timer.resume()
-    }
+        guard let button = statusItem?.button else {
+            Logger.app.error("Cannot reset to idle state: statusItem.button is nil even after recreation")
+            return
+        }
 
-    private func resetToIdleState() {
-        guard let button = statusItem?.button else { return }
-
-        stopRecordingAnimation()
         button.image = AppSetupHelper.createMenuBarIcon()
         button.title = ""
+        Logger.app.debug("Menu bar reset to idle state")
     }
 }

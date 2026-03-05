@@ -65,13 +65,9 @@ internal extension AppDelegate {
         Task { await MLDaemonManager.shared.shutdown() }
         recordingAnimationTimer?.cancel()
         recordingAnimationTimer = nil
-        elapsedTimeTimer?.invalidate()
-        elapsedTimeTimer = nil
 
         recordingWindow = nil
         recordingWindowDelegate = nil
-
-        AppSetupHelper.cleanupOldTemporaryFiles()
     }
 
     func hasAPIKey(service: String, account: String) -> Bool {

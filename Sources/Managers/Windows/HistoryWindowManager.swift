@@ -34,10 +34,20 @@ internal final class HistoryWindowManager: NSObject {
         }
         
         // Create new window
+        let modelContainer = DataManager.shared.sharedModelContainer ?? createFallbackContainer()
+
         let historyView = TranscriptionHistoryView()
-            .modelContainer(DataManager.shared.sharedModelContainer ?? createFallbackContainer())
-        
-        let hostingController = NSHostingController(rootView: historyView)
+        let hostingController = NSHostingController(rootView: AnyView(
+            Group {
+                if let modelContainer = modelContainer {
+                    historyView.modelContainer(modelContainer)
+                } else {
+                    // History disabled due to database error - show empty state
+                    historyView
+                }
+            }
+        ))
+
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
@@ -80,16 +90,16 @@ internal final class HistoryWindowManager: NSObject {
     }
     
     /// Creates a fallback container if DataManager isn't initialized
-    private func createFallbackContainer() -> ModelContainer {
+    private func createFallbackContainer() -> ModelContainer? {
         let schema = Schema([TranscriptionRecord.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        
+
         do {
             return try ModelContainer(for: schema, configurations: [config])
         } catch {
             Logger.app.error("Failed to create fallback ModelContainer with schema configuration: \(error)")
         }
-        
+
         do {
             return try ModelContainer(
                 for: TranscriptionRecord.self,
@@ -98,8 +108,16 @@ internal final class HistoryWindowManager: NSObject {
         } catch {
             Logger.app.critical("Failed to create in-memory ModelContainer fallback: \(error)")
         }
-        
-        preconditionFailure("Unable to create fallback ModelContainer")
+
+        // Show alert to user instead of crashing
+        let alert = NSAlert()
+        alert.messageText = "Database Error"
+        alert.informativeText = "Unable to initialize the transcription history database. History will not be available."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+
+        return nil
     }
 }
 

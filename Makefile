@@ -1,4 +1,4 @@
-.PHONY: help build build-notarize install test clean update-brew-cask publish-brew-cask release
+.PHONY: help build build-notarize install test clean reset-permissions update-brew-cask publish-brew-cask release
 
 SCRIPTS := scripts
 
@@ -8,6 +8,7 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  install            - Build and install VoiceFlow to /Applications/ (recommended)"
+	@echo "  reset-permissions  - Reset and re-grant accessibility permission (fixes Smart Paste)"
 	@echo "  build              - Build the release app bundle"
 	@echo "  build-notarize     - Build and notarize the app"
 	@echo "  test               - Run tests"
@@ -19,6 +20,10 @@ help:
 # Build and install VoiceFlow to /Applications/
 install:
 	$(SCRIPTS)/install-voiceflow.sh
+
+# Reset accessibility permissions (fixes Smart Paste after rebuild)
+reset-permissions:
+	$(SCRIPTS)/reset-accessibility.sh
 
 # Build the app
 build:

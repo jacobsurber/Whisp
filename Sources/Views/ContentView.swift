@@ -30,10 +30,7 @@ internal struct ContentView: View {
     @State var recordingFailedObserver: NSObjectProtocol?
     @State var targetAppForPaste: NSRunningApplication?
     @State var windowFocusObserver: NSObjectProtocol?
-    @State var retryObserver: NSObjectProtocol?
-    @State var showAudioFileObserver: NSObjectProtocol?
     @State var transcribeFileObserver: NSObjectProtocol?
-    @State var lastAudioURL: URL?
     @State var awaitingSemanticPaste = false
     @State var lastSourceAppInfo: SourceAppInfo?
     @AppStorage("hasShownFirstModelUseHint") var hasShownFirstModelUseHint = false

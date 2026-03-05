@@ -30,7 +30,7 @@ internal extension AppDelegate {
         }
     }
 
-    func createRecordingWindow() {
+    func createRecordingWindow(hidden: Bool = false) {
         guard let recorder = audioRecorder else {
             Logger.app.error("Cannot create recording window: AudioRecorder not initialized")
             return
@@ -54,10 +54,16 @@ internal extension AppDelegate {
         window.hasShadow = true
         window.isOpaque = false
 
+        // Use DataManager's container, or fallback to in-memory, or nil (history disabled)
+        let modelContainer = DataManager.shared.sharedModelContainer ?? createFallbackModelContainer()
         let contentView = ContentView(audioRecorder: recorder)
-            .modelContainer(DataManager.shared.sharedModelContainer ?? createFallbackModelContainer())
+        if let modelContainer = modelContainer {
+            window.contentView = NSHostingView(rootView: contentView.modelContainer(modelContainer))
+        } else {
+            // History disabled - continue without model container
+            window.contentView = NSHostingView(rootView: contentView)
+        }
 
-        window.contentView = NSHostingView(rootView: contentView)
         window.center()
 
         window.standardWindowButton(.closeButton)?.isHidden = true
@@ -70,6 +76,13 @@ internal extension AppDelegate {
         window.delegate = recordingWindowDelegate
 
         recordingWindow = window
+
+        // Keep window hidden for background recording mode
+        if !hidden {
+            Logger.app.debug("Recording window created in visible mode")
+        } else {
+            Logger.app.debug("Recording window created in hidden mode (background processing)")
+        }
     }
 
     private func onRecordingWindowClosed() {
@@ -78,13 +91,26 @@ internal extension AppDelegate {
         Logger.app.info("Recording window closed and references cleaned up")
     }
 
-    private func createFallbackModelContainer() -> ModelContainer {
+    private func createFallbackModelContainer() -> ModelContainer? {
         do {
             let schema = Schema([TranscriptionRecord.self])
             let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
             return try ModelContainer(for: schema, configurations: [config])
         } catch {
-            fatalError("Failed to create fallback ModelContainer: \(error)")
+            // Critical error but don't crash - transcription history will be disabled
+            Logger.app.critical("Failed to create fallback ModelContainer: \(error)")
+
+            // Show alert to user (only once per session)
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Database Error"
+                alert.informativeText = "VoiceFlow couldn't initialize the transcription history database. History will be disabled this session."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+
+            return nil
         }
     }
 

@@ -307,25 +307,27 @@ private struct TranscriptionDetailView: View {
         do {
             let container = try ModelContainer(for: TranscriptionRecord.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
             let context = ModelContext(container)
-            
+
             // Add sample data
             let sampleRecords = [
                 TranscriptionRecord(text: "This is a sample transcription from OpenAI Whisper service. It demonstrates how the history view will look with longer text content.", provider: .openai, duration: 12.5),
                 TranscriptionRecord(text: "Short test", provider: .local, duration: 2.1, modelUsed: "base"),
                 TranscriptionRecord(text: "Another example transcription that shows how multiple records are displayed in the history view.", provider: .gemini, duration: 8.3)
             ]
-            
+
             for record in sampleRecords {
                 context.insert(record)
             }
-            
+
             try context.save()
             return container
         } catch {
-            fatalError("Failed to create preview container: \(error)")
+            // Preview only - return empty in-memory container
+            print("Preview container creation failed: \(error)")
+            return try! ModelContainer(for: TranscriptionRecord.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         }
     }()
-    
+
     return TranscriptionHistoryView()
         .modelContainer(previewContainer)
         .frame(
@@ -339,10 +341,12 @@ private struct TranscriptionDetailView: View {
         do {
             return try ModelContainer(for: TranscriptionRecord.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         } catch {
-            fatalError("Failed to create preview container: \(error)")
+            // Preview only - shouldn't happen but handle gracefully
+            print("Preview container creation failed: \(error)")
+            return try! ModelContainer(for: TranscriptionRecord.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         }
     }()
-    
+
     return TranscriptionHistoryView()
         .modelContainer(previewContainer)
         .frame(

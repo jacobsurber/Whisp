@@ -17,6 +17,10 @@ internal class AudioRecorder: NSObject, ObservableObject {
     private let dateProvider: () -> Date
     private(set) var currentSessionStart: Date?
     private(set) var lastRecordingDuration: TimeInterval?
+
+    // Debouncing to prevent rapid recording starts
+    private var lastRecordingAttempt: Date?
+    private let debounceInterval: TimeInterval = 0.2  // 200ms debounce window
     
     override init() {
         self.volumeManager = MicrophoneVolumeManager.shared
@@ -82,11 +86,19 @@ internal class AudioRecorder: NSObject, ObservableObject {
     }
     
     func startRecording() -> Bool {
+        // Debounce rapid recording attempts
+        let now = dateProvider()
+        if let last = lastRecordingAttempt, now.timeIntervalSince(last) < debounceInterval {
+            Logger.audioRecorder.debug("Recording attempt debounced (too soon after last attempt)")
+            return false
+        }
+        lastRecordingAttempt = now
+
         // Check permission first
         guard hasPermission else {
             return false
         }
-        
+
         // Prevent re-entrancy - if already recording, return false
         guard audioRecorder == nil else {
             return false

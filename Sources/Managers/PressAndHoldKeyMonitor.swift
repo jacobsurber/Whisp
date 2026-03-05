@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import os.log
 
 internal enum PressAndHoldMode: String, CaseIterable, Identifiable {
     case hold
@@ -152,6 +153,10 @@ internal final class PressAndHoldKeyMonitor {
 
     private var isPressed = false
 
+    // Stuck state recovery: if key remains "pressed" for too long, auto-release
+    private var stuckStateTimeoutTask: Task<Void, Never>?
+    private let stuckStateTimeout: TimeInterval = 10.0  // 10 seconds max hold time
+
     init(
         configuration: PressAndHoldConfiguration,
         keyDownHandler: @escaping () -> Void,
@@ -198,6 +203,9 @@ internal final class PressAndHoldKeyMonitor {
             keyUpMonitor = nil
         }
         isPressed = false
+
+        // Clean up timeout task
+        cancelStuckStateRecovery()
     }
 
     deinit {
@@ -228,16 +236,48 @@ internal final class PressAndHoldKeyMonitor {
         if isKeyDownEvent {
             guard !isPressed else { return }
             isPressed = true
+
+            // Start stuck state recovery timeout
+            startStuckStateRecovery()
+
             Task { @MainActor [keyDownHandler] in
                 keyDownHandler()
             }
         } else {
             guard isPressed else { return }
             isPressed = false
+
+            // Cancel stuck state recovery since key was properly released
+            cancelStuckStateRecovery()
+
             guard let keyUpHandler else { return }
             Task { @MainActor in
                 keyUpHandler()
             }
         }
+    }
+
+    private func startStuckStateRecovery() {
+        // Cancel any existing timeout
+        stuckStateTimeoutTask?.cancel()
+
+        // Start new timeout
+        stuckStateTimeoutTask = Task { [weak self, stuckStateTimeout] in
+            try? await Task.sleep(nanoseconds: UInt64(stuckStateTimeout * 1_000_000_000))
+
+            // If not cancelled and still pressed, force release
+            guard let self = self, self.isPressed else { return }
+
+            Logger.app.warning("Press-and-hold key stuck for \(stuckStateTimeout)s - auto-releasing")
+
+            self.monitorQueue.async { [weak self] in
+                self?.processTransition(isKeyDownEvent: false)
+            }
+        }
+    }
+
+    private func cancelStuckStateRecovery() {
+        stuckStateTimeoutTask?.cancel()
+        stuckStateTimeoutTask = nil
     }
 }

@@ -17,7 +17,6 @@ internal extension ContentView {
         removeNotificationObservers()
         processingTask?.cancel()
         processingTask = nil
-        lastAudioURL = nil
     }
     
     private func setupNotificationObservers() {
@@ -138,22 +137,6 @@ internal extension ContentView {
             }
         }
         
-        retryObserver = NotificationCenter.default.addObserver(
-            forName: .retryTranscriptionRequested,
-            object: nil,
-            queue: .main
-        ) { _ in
-            retryLastTranscription()
-        }
-        
-        showAudioFileObserver = NotificationCenter.default.addObserver(
-            forName: .showAudioFileRequested,
-            object: nil,
-            queue: .main
-        ) { _ in
-            showLastAudioFile()
-        }
-        
         transcribeFileObserver = NotificationCenter.default.addObserver(
             forName: .transcribeAudioFile,
             object: nil,
@@ -173,8 +156,6 @@ internal extension ContentView {
         removeObserver(&targetAppObserver)
         removeObserver(&recordingFailedObserver)
         removeObserver(&windowFocusObserver)
-        removeObserver(&retryObserver)
-        removeObserver(&showAudioFileObserver)
         removeObserver(&transcribeFileObserver)
     }
     

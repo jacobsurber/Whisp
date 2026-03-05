@@ -1,8 +1,23 @@
 import SwiftUI
 import AppKit
+import os.log
 
 internal extension ContentView {
     func startRecording() {
+        // Safety check: don't allow recording while transcription is processing
+        guard !isProcessing else {
+            Logger.app.warning("Cannot start recording while transcription is in progress")
+            errorMessage = "Please wait for current transcription to complete"
+            showError = true
+            return
+        }
+
+        // Safety check: don't allow recording if already recording
+        guard !audioRecorder.isRecording else {
+            Logger.app.warning("Cannot start recording while already recording")
+            return
+        }
+
         if !audioRecorder.hasPermission {
             permissionManager.requestPermissionWithEducation()
             return
@@ -13,9 +28,7 @@ internal extension ContentView {
         if transcriptionProvider == .local {
             startWhisperModelDownloadIfNeeded(selectedWhisperModel)
         }
-        
-        lastAudioURL = nil
-        
+
         let success = audioRecorder.startRecording()
         if !success {
             errorMessage = LocalizedStrings.Errors.failedToStartRecording
@@ -48,8 +61,7 @@ internal extension ContentView {
                 guard !audioURL.path.isEmpty else {
                     throw NSError(domain: "AudioRecorder", code: 2, userInfo: [NSLocalizedDescriptionKey: LocalizedStrings.Errors.recordingURLEmpty])
                 }
-                
-                lastAudioURL = audioURL
+
                 try Task.checkCancellation()
                 
                 let text: String
@@ -173,8 +185,6 @@ internal extension ContentView {
             progressMessage = "Transcribing file..."
 
             do {
-                try Task.checkCancellation()
-                lastAudioURL = audioURL
                 try Task.checkCancellation()
 
                 let text: String
@@ -317,152 +327,6 @@ internal extension ContentView {
                 showSuccess = false
             }
         }
-    }
-    
-    func retryLastTranscription() {
-        guard !isProcessing else { return }
-        
-        guard let audioURL = lastAudioURL else {
-            errorMessage = "No audio file available to retry. Please record again."
-            showError = true
-            return
-        }
-        
-        guard FileManager.default.fileExists(atPath: audioURL.path) else {
-            errorMessage = "Audio file no longer exists. Please record again."
-            showError = true
-            lastAudioURL = nil
-            return
-        }
-        
-        processingTask?.cancel()
-        
-        processingTask = Task {
-            isProcessing = true
-            transcriptionStartTime = Date()
-            progressMessage = "Retrying transcription..."
-            
-            do {
-                try Task.checkCancellation()
-                
-                let text: String
-                if transcriptionProvider == .local {
-                    text = try await speechService.transcribeRaw(audioURL: audioURL, provider: transcriptionProvider, model: selectedWhisperModel)
-                } else {
-                    text = try await speechService.transcribeRaw(audioURL: audioURL, provider: transcriptionProvider)
-                }
-                
-                try Task.checkCancellation()
-                
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-
-                let enableSmartPaste = UserDefaults.standard.bool(forKey: "enableSmartPaste")
-                let modeRaw = UserDefaults.standard.string(forKey: AppDefaults.Keys.semanticCorrectionMode) ?? SemanticCorrectionMode.off.rawValue
-                let mode = SemanticCorrectionMode(rawValue: modeRaw) ?? .off
-                let shouldAwaitSemanticForPaste = enableSmartPaste && ((mode == .localMLX) || (mode == .cloud && (transcriptionProvider == .openai || transcriptionProvider == .gemini)))
-
-                if shouldAwaitSemanticForPaste {
-                    await MainActor.run {
-                        awaitingSemanticPaste = true
-                        progressMessage = "Semantic correction..."
-                    }
-                    let capturedBundleId: String? = await MainActor.run { currentSourceAppInfo().bundleIdentifier }
-                    Task.detached { [text, transcriptionProvider, capturedBundleId] in
-                        let outcome = await semanticCorrectionService.correctWithWarning(text: text, providerUsed: transcriptionProvider, sourceAppBundleId: capturedBundleId)
-                        if let warning = outcome.warning {
-                            await MainActor.run { progressMessage = warning }
-                        }
-                        let corrected = outcome.text
-                        let shouldSave2: Bool = await MainActor.run { DataManager.shared.isHistoryEnabled }
-                        if shouldSave2 {
-                            let modelUsed: String? = await MainActor.run { (transcriptionProvider == .local) ? self.selectedWhisperModel.rawValue : nil }
-                            let sourceInfo: SourceAppInfo = await MainActor.run { self.currentSourceAppInfo() }
-                            let record = TranscriptionRecord(
-                                text: corrected,
-                                provider: transcriptionProvider,
-                                duration: nil,
-                                modelUsed: modelUsed,
-                                sourceAppBundleId: sourceInfo.bundleIdentifier,
-                                sourceAppName: sourceInfo.displayName,
-                                sourceAppIconData: sourceInfo.iconData
-                            )
-                            await DataManager.shared.saveTranscriptionQuietly(record)
-                        }
-                        await MainActor.run {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(corrected, forType: .string)
-                            transcriptionStartTime = nil
-                            isProcessing = false
-                            showConfirmationAndPaste(text: corrected)
-                            if awaitingSemanticPaste {
-                                performUserTriggeredPaste()
-                                awaitingSemanticPaste = false
-                            }
-                        }
-                    }
-                } else {
-                    await MainActor.run {
-                        transcriptionStartTime = nil
-                        showConfirmationAndPaste(text: text)
-                    }
-                    let capturedBundleId2: String? = await MainActor.run { currentSourceAppInfo().bundleIdentifier }
-                    Task.detached { [text, transcriptionProvider, capturedBundleId2] in
-                        let outcome = await semanticCorrectionService.correctWithWarning(text: text, providerUsed: transcriptionProvider, sourceAppBundleId: capturedBundleId2)
-                        if let warning = outcome.warning {
-                            await MainActor.run { progressMessage = warning }
-                        }
-                        let corrected = outcome.text
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(corrected, forType: .string)
-                        let shouldSave3: Bool = await MainActor.run { DataManager.shared.isHistoryEnabled }
-                        if shouldSave3 {
-                            let modelUsed: String? = await MainActor.run { (transcriptionProvider == .local) ? self.selectedWhisperModel.rawValue : nil }
-                            let sourceInfo: SourceAppInfo = await MainActor.run { self.currentSourceAppInfo() }
-                            let record = TranscriptionRecord(
-                                text: corrected,
-                                provider: transcriptionProvider,
-                                duration: nil,
-                                modelUsed: modelUsed,
-                                sourceAppBundleId: sourceInfo.bundleIdentifier,
-                                sourceAppName: sourceInfo.displayName,
-                                sourceAppIconData: sourceInfo.iconData
-                            )
-                            await DataManager.shared.saveTranscriptionQuietly(record)
-                        }
-                    }
-                }
-            } catch is CancellationError {
-                await MainActor.run {
-                    isProcessing = false
-                    transcriptionStartTime = nil
-                }
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    showError = true
-                    isProcessing = false
-                    transcriptionStartTime = nil
-                }
-            }
-        }
-    }
-    
-    func showLastAudioFile() {
-        guard let audioURL = lastAudioURL else {
-            errorMessage = "No audio file available to show."
-            showError = true
-            return
-        }
-        
-        guard FileManager.default.fileExists(atPath: audioURL.path) else {
-            errorMessage = "Audio file no longer exists."
-            showError = true
-            lastAudioURL = nil
-            return
-        }
-        
-        NSWorkspace.shared.selectFile(audioURL.path, inFileViewerRootedAtPath: audioURL.deletingLastPathComponent().path)
     }
     
     private func isLocalModelInvocationPlanned() -> Bool {

@@ -7,7 +7,7 @@ final class AppCategoryManagerTests: XCTestCase {
     private var defaults: UserDefaults!
     private var categoryStore: CategoryStore!
     private var tempURL: URL!
-    private let suiteName = "com.audiowhisper.tests.categories"
+    private let suiteName = "com.voiceflow.tests.categories"
 
     override func setUp() async throws {
         defaults = UserDefaults(suiteName: suiteName)

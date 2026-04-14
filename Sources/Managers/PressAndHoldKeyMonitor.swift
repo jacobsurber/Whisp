@@ -88,7 +88,7 @@ internal struct PressAndHoldConfiguration: Equatable {
     var mode: PressAndHoldMode
 
     static let defaults = PressAndHoldConfiguration(
-        enabled: false,
+        enabled: true,
         key: .rightCommand,
         mode: .hold
     )

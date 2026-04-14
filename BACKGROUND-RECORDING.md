@@ -84,39 +84,8 @@ For completely silent operation:
   - What popup appears (screenshot if possible)
   - What action triggered it (start recording, stop recording, etc.)
 
-## Technical Details
-
-### What We Changed
-**File**: `AppDelegate+Hotkeys.swift`
-
-**Before**:
-```swift
-showRecordingWindowForProcessing()  // Shows window, steals focus
-```
-
-**After**:
-```swift
-// Silent recording - menu bar only
-updateMenuBarIcon(isRecording: true)
-NotificationCenter.default.post(name: .spaceKeyPressed, object: nil)
-```
-
-### Key Improvements
-1. **Removed all `showRecordingWindowForProcessing()` calls** from press-and-hold flow
-2. **Silent failure handling** - logs errors instead of showing alerts
-3. **Menu bar-centric UI** - all feedback through status item
-4. **Background transcription** - ContentView processes without being visible
-
 ## Performance
 
 - **Start delay**: < 50ms (just audio recording startup)
-- **Memory**: Same as before (window still exists, just hidden)
-- **CPU**: Same transcription performance
-- **UX**: 90% reduction in interruptions
-
-## Future Improvements
-
-- [ ] Add preference for "Always use background mode" vs "Show window"
-- [ ] Toast notification when transcription completes (optional)
-- [ ] Haptic feedback on Mac with Touch Bar
-- [ ] Visual waveform in menu bar during recording (optional)
+- **CPU**: Same transcription performance regardless of UI mode
+- **UX**: Zero interruptions — recording and transcription happen entirely in the background

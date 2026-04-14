@@ -33,7 +33,11 @@ internal extension AppDelegate {
         case .hold:
             startRecordingFromPressAndHold()
         case .toggle:
-            handleHotkey(source: .pressAndHold)
+            if audioRecorder?.isRecording == true {
+                stopRecordingFromPressAndHold()
+            } else {
+                startRecordingFromPressAndHold()
+            }
         }
     }
 
@@ -179,17 +183,6 @@ internal extension AppDelegate {
         }
 
         return SourceAppInfo.unknown
-    }
-
-    func handleHotkey(source: HotkeyTriggerSource) {
-        // Standard hotkey is disabled if press-and-hold is enabled
-        if source == .standardHotkey && pressAndHoldConfiguration.enabled {
-            return
-        }
-
-        // Note: Standard hotkey no longer supported since we removed the recording window.
-        // Users should use press-and-hold mode (Control key) for recording.
-        Logger.app.info("Standard hotkey no longer supported - please use press-and-hold Control key")
     }
 
     private func updateMenuBarIcon(isRecording: Bool) {

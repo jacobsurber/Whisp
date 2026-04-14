@@ -1,19 +1,14 @@
 import SwiftUI
 import AVFoundation
-import HotKey
 import AppKit
 
 internal struct DashboardRecordingView: View {
     @AppStorage("selectedMicrophone") private var selectedMicrophone = ""
-    @AppStorage("globalHotkey") private var globalHotkey = "⌘⇧Space"
     @AppStorage("pressAndHoldEnabled") private var pressAndHoldEnabled = PressAndHoldConfiguration.defaults.enabled
     @AppStorage("pressAndHoldKeyIdentifier") private var pressAndHoldKeyIdentifier = PressAndHoldConfiguration.defaults.key.rawValue
     @AppStorage("pressAndHoldMode") private var pressAndHoldModeRaw = PressAndHoldConfiguration.defaults.mode.rawValue
 
     @State private var availableMicrophones: [AVCaptureDevice] = []
-    @State private var isRecordingHotkey = false
-    @State private var recordedModifiers: NSEvent.ModifierFlags = []
-    @State private var recordedKey: Key?
 
     var body: some View {
         Form {
@@ -32,38 +27,6 @@ internal struct DashboardRecordingView: View {
                 }
             } header: {
                 Text("Microphone")
-            }
-
-            Section {
-                if isRecordingHotkey {
-                    HotKeyRecorderView(
-                        isRecording: $isRecordingHotkey,
-                        recordedModifiers: $recordedModifiers,
-                        recordedKey: $recordedKey,
-                        onComplete: { newHotkey in
-                            globalHotkey = newHotkey
-                            updateGlobalHotkey(newHotkey)
-                        }
-                    )
-                } else {
-                    HStack(spacing: 10) {
-                        Text(globalHotkey)
-                            .font(.system(.body, design: .monospaced))
-                            .monospacedDigit()
-
-                        Spacer()
-
-                        Button("Change…") {
-                            isRecordingHotkey = true
-                            recordedModifiers = []
-                            recordedKey = nil
-                        }
-                    }
-                }
-            } header: {
-                Text("Global Hotkey")
-            } footer: {
-                Text("Starts and stops recording system-wide.")
             }
 
             Section {
@@ -130,12 +93,6 @@ internal struct DashboardRecordingView: View {
         NotificationCenter.default.post(name: .pressAndHoldSettingsChanged, object: configuration)
     }
 
-    private func updateGlobalHotkey(_ newHotkey: String) {
-        NotificationCenter.default.post(
-            name: .updateGlobalHotkey,
-            object: newHotkey
-        )
-    }
 }
 
 #Preview {

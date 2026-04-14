@@ -4,7 +4,6 @@ import Foundation
 
 internal extension Notification.Name {
     // MARK: - Settings and Configuration
-    static let updateGlobalHotkey = Notification.Name("UpdateGlobalHotkey")
     static let pressAndHoldSettingsChanged = Notification.Name("PressAndHoldSettingsChanged")
 
     // MARK: - Recording Events

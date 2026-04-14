@@ -116,8 +116,9 @@ Temporary Items
 .apdisk
 
 # App specific
-AudioWhisper.app/
-AudioWhisper.zip
+VoiceFlow.app/
+VoiceFlow.zip
+*.dmg
 notarization.log
 *.xcodeproj/
 __pycache__
@@ -125,6 +126,6 @@ __pycache__
 # Environment
 .env
 .env.local
-AudioWhisper.iconset/
+VoiceFlow.iconset/
 .build-uv/
 .beads/

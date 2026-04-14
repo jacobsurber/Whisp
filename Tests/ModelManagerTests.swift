@@ -96,8 +96,8 @@ class MockModelManager {
     
     var modelsDirectory: URL {
         let appSupport = mockFileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let audioWhisperDir = appSupport.appendingPathComponent("VoiceFlow")
-        let modelsDir = audioWhisperDir.appendingPathComponent("Models")
+        let voiceFlowDir = appSupport.appendingPathComponent("VoiceFlow")
+        let modelsDir = voiceFlowDir.appendingPathComponent("Models")
         
         try? mockFileManager.createDirectory(at: modelsDir, withIntermediateDirectories: true, attributes: nil)
         return modelsDir
@@ -105,16 +105,16 @@ class MockModelManager {
     
     nonisolated func isModelDownloaded(_ model: WhisperModel) -> Bool {
         let appSupport = mockFileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let audioWhisperDir = appSupport.appendingPathComponent("VoiceFlow")
-        let modelsDir = audioWhisperDir.appendingPathComponent("Models")
+        let voiceFlowDir = appSupport.appendingPathComponent("VoiceFlow")
+        let modelsDir = voiceFlowDir.appendingPathComponent("Models")
         let modelPath = modelsDir.appendingPathComponent(model.fileName)
         return mockFileManager.fileExists(atPath: modelPath.path)
     }
     
     nonisolated func getModelPath(_ model: WhisperModel) -> URL? {
         let appSupport = mockFileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let audioWhisperDir = appSupport.appendingPathComponent("VoiceFlow")
-        let modelsDir = audioWhisperDir.appendingPathComponent("Models")
+        let voiceFlowDir = appSupport.appendingPathComponent("VoiceFlow")
+        let modelsDir = voiceFlowDir.appendingPathComponent("Models")
         let modelPath = modelsDir.appendingPathComponent(model.fileName)
         return isModelDownloaded(model) ? modelPath : nil
     }
@@ -172,8 +172,8 @@ class MockModelManager {
     
     nonisolated func deleteModel(_ model: WhisperModel) throws {
         let appSupport = mockFileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let audioWhisperDir = appSupport.appendingPathComponent("VoiceFlow")
-        let modelsDir = audioWhisperDir.appendingPathComponent("Models")
+        let voiceFlowDir = appSupport.appendingPathComponent("VoiceFlow")
+        let modelsDir = voiceFlowDir.appendingPathComponent("Models")
         let modelPath = modelsDir.appendingPathComponent(model.fileName)
         
         if mockFileManager.fileExists(atPath: modelPath.path) {
@@ -190,8 +190,8 @@ class MockModelManager {
         var totalSize: Int64 = 0
         
         let appSupport = mockFileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let audioWhisperDir = appSupport.appendingPathComponent("VoiceFlow")
-        let modelsDir = audioWhisperDir.appendingPathComponent("Models")
+        let voiceFlowDir = appSupport.appendingPathComponent("VoiceFlow")
+        let modelsDir = voiceFlowDir.appendingPathComponent("Models")
         
         for model in downloadedModels {
             let modelPath = modelsDir.appendingPathComponent(model.fileName)

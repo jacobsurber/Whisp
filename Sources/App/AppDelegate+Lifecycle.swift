@@ -41,9 +41,6 @@ internal extension AppDelegate {
         }
         statusItem?.menu = makeStatusMenu()
 
-        hotKeyManager = HotKeyManager { [weak self] in
-            self?.handleHotkey(source: .standardHotkey)
-        }
         configureShortcutMonitors()
 
         NotificationCenter.default.addObserver(

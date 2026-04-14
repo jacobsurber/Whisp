@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# AudioWhisper Release Build Script
+# VoiceFlow Release Build Script
 # For development, use: swift build && swift run
 # This script is for creating distributable releases
 
@@ -30,7 +30,7 @@ BUILD_DATE=$(date '+%Y-%m-%d')
 
 # Read version from VERSION file or use environment variable
 DEFAULT_VERSION=$(cat VERSION | tr -d '[:space:]')
-VERSION="${AUDIO_WHISPER_VERSION:-$DEFAULT_VERSION}"
+VERSION="${VOICEFLOW_VERSION:-$DEFAULT_VERSION}"
 
 echo "🎙️ Building VoiceFlow version $VERSION..."
 
@@ -120,27 +120,10 @@ if [ -f "Sources/Resources/DashboardLogo.jpg" ]; then
   echo "Copied dashboard logo"
 fi
 
-# Copy Python scripts for Parakeet and MLX support
-if [ -f "Sources/parakeet_transcribe_pcm.py" ]; then
-  cp Sources/parakeet_transcribe_pcm.py VoiceFlow.app/Contents/Resources/
-  echo "Copied Parakeet PCM Python script"
-else
-  echo "⚠️ parakeet_transcribe_pcm.py not found, Parakeet functionality will not work"
-fi
-
-if [ -f "Sources/mlx_semantic_correct.py" ]; then
-  cp Sources/mlx_semantic_correct.py VoiceFlow.app/Contents/Resources/
-  echo "Copied MLX semantic correction Python script"
-else
-  echo "⚠️ mlx_semantic_correct.py not found, MLX semantic correction will not work"
-fi
-
 # Copy verify scripts
 if [ -f "Sources/verify_parakeet.py" ]; then
   cp Sources/verify_parakeet.py VoiceFlow.app/Contents/Resources/
-fi
-if [ -f "Sources/verify_mlx.py" ]; then
-  cp Sources/verify_mlx.py VoiceFlow.app/Contents/Resources/
+  echo "Copied verify_parakeet.py"
 fi
 
 # Copy ML daemon entrypoint and package
@@ -240,19 +223,19 @@ cat >VoiceFlow.app/Contents/Info.plist <<EOF
 EOF
 
 # Generate app icon from our source image
-if [ -f "AudioWhisperIcon.png" ]; then
+if [ -f "VoiceFlowIcon.png" ]; then
   "$SCRIPT_DIR/generate-icons.sh"
 
   # Create proper icns file directly in app bundle
   if command -v iconutil >/dev/null 2>&1; then
-    iconutil -c icns AudioWhisper.iconset -o VoiceFlow.app/Contents/Resources/AppIcon.icns 2>/dev/null || echo "Note: iconutil failed, app will use default icon"
+    iconutil -c icns VoiceFlow.iconset -o VoiceFlow.app/Contents/Resources/AppIcon.icns 2>/dev/null || echo "Note: iconutil failed, app will use default icon"
   fi
 
   # Clean up temporary files
-  rm -rf AudioWhisper.iconset
+  rm -rf VoiceFlow.iconset
   rm -f AppIcon.icns # Remove any stray icns file from root
 else
-  echo "⚠️ AudioWhisperIcon.png not found, app will use default icon"
+  echo "⚠️ VoiceFlowIcon.png not found, app will use default icon"
 fi
 
 # Make executable
@@ -334,16 +317,16 @@ if [ "$NOTARIZE" = true ]; then
   echo "🔐 Starting notarization process..."
 
   # Check for required environment variables
-  if [ -z "$AUDIO_WHISPER_APPLE_ID" ] || [ -z "$AUDIO_WHISPER_APPLE_PASSWORD" ] || [ -z "$AUDIO_WHISPER_TEAM_ID" ]; then
+  if [ -z "$VOICEFLOW_APPLE_ID" ] || [ -z "$VOICEFLOW_APPLE_PASSWORD" ] || [ -z "$VOICEFLOW_TEAM_ID" ]; then
     echo "❌ Notarization requires the following environment variables:"
-    echo "   AUDIO_WHISPER_APPLE_ID - Your Apple ID email"
-    echo "   AUDIO_WHISPER_APPLE_PASSWORD - App-specific password for notarization"
-    echo "   AUDIO_WHISPER_TEAM_ID - Your Apple Developer Team ID"
+    echo "   VOICEFLOW_APPLE_ID - Your Apple ID email"
+    echo "   VOICEFLOW_APPLE_PASSWORD - App-specific password for notarization"
+    echo "   VOICEFLOW_TEAM_ID - Your Apple Developer Team ID"
     echo ""
     echo "To create an app-specific password:"
     echo "1. Go to https://appleid.apple.com/account/manage"
     echo "2. Sign in and go to Security > App-Specific Passwords"
-    echo "3. Generate a new password for AudioWhisper notarization"
+    echo "3. Generate a new password for VoiceFlow notarization"
     echo ""
     exit 1
   fi
@@ -362,9 +345,9 @@ if [ "$NOTARIZE" = true ]; then
   # Submit for notarization
   echo "📤 Submitting to Apple for notarization..."
   xcrun notarytool submit VoiceFlow.zip \
-    --apple-id "$AUDIO_WHISPER_APPLE_ID" \
-    --password "$AUDIO_WHISPER_APPLE_PASSWORD" \
-    --team-id "$AUDIO_WHISPER_TEAM_ID" \
+    --apple-id "$VOICEFLOW_APPLE_ID" \
+    --password "$VOICEFLOW_APPLE_PASSWORD" \
+    --team-id "$VOICEFLOW_TEAM_ID" \
     --wait 2>&1 | tee notarization.log
 
   # Check if notarization was successful

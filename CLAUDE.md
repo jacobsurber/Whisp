@@ -1,6 +1,6 @@
-# AudioWhisper — LLM Assistant Guidelines
+# VoiceFlow — LLM Assistant Guidelines
 
-This document provides instructions for AI assistants (e.g., ChatGPT, Claude) on how to work effectively with the AudioWhisper codebase. Follow these guidelines when analyzing, proposing changes, or implementing features.
+This document provides instructions for AI assistants (e.g., ChatGPT, Claude) on how to work effectively with the VoiceFlow codebase. Follow these guidelines when analyzing, proposing changes, or implementing features.
 
 ## 1. Purpose and Scope
 
@@ -13,12 +13,11 @@ This document provides instructions for AI assistants (e.g., ChatGPT, Claude) on
 
 ## 2. Libraries and Frameworks
 
-AudioWhisper relies on:
+VoiceFlow relies on:
 - **SwiftUI** + **AppKit** for UI and macOS menu bar integration
 - **AVFoundation** for audio recording
 - **Alamofire** for HTTP requests and model downloads
 - **WhisperKit** (CoreML) for local transcription
-- **HotKey** for global keyboard shortcuts
 - **Combine** / Swift Concurrency for asynchronous logic
 - **KeychainAccess** for secure API key storage
 
@@ -76,7 +75,7 @@ make test
 **Critical**: The app uses adhoc code signing. When replacing the app bundle, macOS invalidates existing Accessibility permissions because the code signature hash changes.
 
 After deploying a new build, the user must:
-1. Open **System Settings → Privacy & Security → Accessibility**
+1. Open **System Settings > Privacy & Security > Accessibility**
 2. **Remove** VoiceFlow from the list (select it, click `-`)
 3. **Re-add** it (click `+`, navigate to `/Applications/VoiceFlow.app`)
 4. Ensure the toggle is **ON**

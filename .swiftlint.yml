@@ -4,7 +4,7 @@ included:
 
 excluded:
   - .build
-  - AudioWhisper.app
+  - VoiceFlow.app
   - Sources/Resources
 
 opt_in_rules:

@@ -137,7 +137,7 @@ internal struct UvBootstrap {
     // Allow tests to override the base Application Support directory via env var
     private static func applicationSupportBaseDirectory() throws -> URL {
         let fm = FileManager.default
-        if let override = ProcessInfo.processInfo.environment["AUDIOWHISPER_APP_SUPPORT_DIR"], !override.isEmpty {
+        if let override = ProcessInfo.processInfo.environment["VOICEFLOW_APP_SUPPORT_DIR"], !override.isEmpty {
             let url = URL(fileURLWithPath: override, isDirectory: true)
             if !fm.fileExists(atPath: url.path) {
                 try fm.createDirectory(at: url, withIntermediateDirectories: true)

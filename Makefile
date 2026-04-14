@@ -1,4 +1,4 @@
-.PHONY: help build build-notarize install test clean reset-permissions update-brew-cask publish-brew-cask release
+.PHONY: help build build-notarize install test clean reset-permissions release dmg
 
 SCRIPTS := scripts
 
@@ -13,8 +13,7 @@ help:
 	@echo "  build-notarize     - Build and notarize the app"
 	@echo "  test               - Run tests"
 	@echo "  clean              - Clean build artifacts"
-	@echo "  update-brew-cask   - Update Homebrew cask formula with latest release"
-	@echo "  publish-brew-cask  - Update and publish cask to tap repository"
+	@echo "  dmg                - Create a DMG for distribution"
 	@echo "  release            - Create a new GitHub release"
 
 # Build and install VoiceFlow to /Applications/
@@ -41,30 +40,12 @@ test:
 clean:
 	rm -rf .build
 	rm -rf VoiceFlow.app
-	rm -rf VoiceFlow.app
 	rm -f VoiceFlow.zip
-	rm -f VoiceFlow.zip
-	rm -f Sources/AudioProcessorCLI
+	rm -f *.dmg
 
-# Update the Homebrew cask formula with latest GitHub release
-update-brew-cask:
-	@echo "Updating Homebrew cask formula..."
-	$(SCRIPTS)/update-brew-cask.sh
-
-# Update and publish the cask to the tap repository
-publish-brew-cask: update-brew-cask
-	@echo "Publishing to tap repository..."
-	@VERSION=$$(cat VERSION | tr -d '[:space:]'); \
-	if [ -d "../homebrew-tap" ]; then \
-		cd ../homebrew-tap && \
-		git add Casks/audiowhisper.rb && \
-		git diff --cached --quiet || (git commit -m "Update AudioWhisper to v$$VERSION" && git push); \
-		echo "✅ Published to homebrew-tap"; \
-	else \
-		echo "❌ Error: homebrew-tap repository not found at ../homebrew-tap"; \
-		echo "Please clone it first: git clone https://github.com/mazdak/homebrew-tap.git ../homebrew-tap"; \
-		exit 1; \
-	fi
+# Create a DMG for distribution
+dmg:
+	$(SCRIPTS)/create-dmg.sh
 
 # Create a new release
 release:

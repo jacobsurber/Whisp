@@ -49,7 +49,7 @@ If you prefer manual pasting:
 If the above doesn't work, the app might need a stable signature. Run:
 
 ```bash
-cd /Users/jacobsurber/Dev/Whisper/AudioWhisper
+cd /path/to/VoiceFlow
 make clean
 make install
 ```

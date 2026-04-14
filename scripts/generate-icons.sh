@@ -4,8 +4,8 @@
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 # Generate app icons from source image
-SOURCE_IMAGE="AudioWhisperIcon.png"
-ICONSET_DIR="AudioWhisper.iconset"
+SOURCE_IMAGE="VoiceFlowIcon.png"
+ICONSET_DIR="VoiceFlow.iconset"
 
 if [ ! -f "$SOURCE_IMAGE" ]; then
   echo "Error: $SOURCE_IMAGE not found!"

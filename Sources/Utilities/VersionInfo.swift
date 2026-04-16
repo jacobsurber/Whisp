@@ -2,7 +2,7 @@ import Foundation
 
 struct VersionInfo {
     static let version = "2.1.0"
-    static let gitHash = "90801a9a9e0b61ed4e8818a78f949b21f74fe55f"
+    static let gitHash = "ea79103401ca4852eef0cdde7bc7497d066d2f56"
     static let buildDate = "2026-04-16"
 
     static var displayVersion: String {

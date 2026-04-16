@@ -65,7 +65,8 @@ final class FloatingMicrophoneDockViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.status, .success)
 
-        try? await Task.sleep(for: .milliseconds(30))
+        // Wait generously — CI runners have high Task scheduling latency
+        try? await Task.sleep(for: .milliseconds(200))
 
         XCTAssertEqual(viewModel.status, .ready)
     }

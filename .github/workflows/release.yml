@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag matches VERSION file
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "❌ Tag version ($TAG_VERSION) does not match VERSION file ($FILE_VERSION)"
+            exit 1
+          fi
+          echo "VERSION=$FILE_VERSION" >> "$GITHUB_ENV"
+
+      - name: Verify tag is on master
+        run: |
+          if ! git branch -r --contains "$GITHUB_REF" | grep -q 'origin/master'; then
+            echo "❌ Tag $GITHUB_REF_NAME is not on master branch — aborting release"
+            exit 1
+          fi
+          echo "✅ Tag is on master"
+
+      - name: Run tests
+        run: swift test
+
+      - name: Build universal binary
+        run: |
+          swift build -c release --arch arm64 --arch x86_64 2>&1 || true
+          BINARY=".build/apple/Products/Release/VoiceFlow"
+          if [ ! -f "$BINARY" ]; then
+            echo "❌ Binary not found at $BINARY"
+            exit 1
+          fi
+          echo "✅ Binary built: $(file "$BINARY")"
+
+      - name: Create app bundle
+        run: |
+          GIT_HASH=$(git rev-parse HEAD)
+          BUILD_DATE=$(date '+%Y-%m-%d')
+          BUILD_NUMBER="${VERSION//./}"
+
+          # Generate VersionInfo.swift
+          sed -e "s/VERSION_PLACEHOLDER/$VERSION/g" \
+              -e "s/GIT_HASH_PLACEHOLDER/$GIT_HASH/g" \
+              -e "s/BUILD_DATE_PLACEHOLDER/$BUILD_DATE/g" \
+              Sources/VersionInfo.swift.template > Sources/Utilities/VersionInfo.swift
+
+          # Clean previous binary so stale artifacts can't mask a rebuild failure
+          rm -f .build/apple/Products/Release/VoiceFlow
+
+          # Rebuild with correct version info
+          swift build -c release --arch arm64 --arch x86_64 2>&1 || true
+          if [ ! -f ".build/apple/Products/Release/VoiceFlow" ]; then
+            echo "❌ Rebuild failed — binary not found"
+            exit 1
+          fi
+
+          # Create bundle structure
+          mkdir -p VoiceFlow.app/Contents/{MacOS,Resources,Resources/bin}
+
+          cp .build/apple/Products/Release/VoiceFlow VoiceFlow.app/Contents/MacOS/
+          chmod +x VoiceFlow.app/Contents/MacOS/VoiceFlow
+
+          # Copy SwiftPM-processed resource bundles (Assets.xcassets, etc.)
+          find .build/apple/Products/Release -maxdepth 1 -type d -name "*.bundle" -print0 | while IFS= read -r -d '' bundle; do
+            cp -R "$bundle" VoiceFlow.app/Contents/Resources/
+          done
+
+          # Copy additional resources
+          [ -f Sources/Resources/DashboardLogo.jpg ] && cp Sources/Resources/DashboardLogo.jpg VoiceFlow.app/Contents/Resources/
+          [ -f Sources/verify_parakeet.py ] && cp Sources/verify_parakeet.py VoiceFlow.app/Contents/Resources/
+          [ -f Sources/ml_daemon.py ] && cp Sources/ml_daemon.py VoiceFlow.app/Contents/Resources/
+          [ -d Sources/ml ] && cp -R Sources/ml VoiceFlow.app/Contents/Resources/ && find VoiceFlow.app/Contents/Resources/ml -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          [ -f Sources/Resources/pyproject.toml ] && cp Sources/Resources/pyproject.toml VoiceFlow.app/Contents/Resources/
+
+          # Reuse repo Info.plist and patch build variables + version fields
+          cp Info.plist VoiceFlow.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDevelopmentRegion en" VoiceFlow.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable VoiceFlow" VoiceFlow.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 14.0" VoiceFlow.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" VoiceFlow.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" VoiceFlow.app/Contents/Info.plist
+          # Add icon key if missing
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" VoiceFlow.app/Contents/Info.plist 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile AppIcon" VoiceFlow.app/Contents/Info.plist
+          plutil -lint VoiceFlow.app/Contents/Info.plist
+
+          # Ad-hoc sign for distribution (notarize locally if needed)
+          cat > /tmp/entitlements.plist <<EOF2
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.security.device.audio-input</key><true/>
+              <key>com.apple.security.network.client</key><true/>
+          </dict>
+          </plist>
+          EOF2
+
+          codesign --force --deep --options runtime \
+            --entitlements /tmp/entitlements.plist \
+            --sign - VoiceFlow.app
+
+          codesign --verify --verbose VoiceFlow.app
+
+      - name: Create zip
+        run: zip -r "VoiceFlow-${VERSION}.zip" VoiceFlow.app
+
+      - name: Create DMG
+        run: |
+          STAGING=$(mktemp -d)
+          cp -R VoiceFlow.app "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create \
+            -volname VoiceFlow \
+            -srcfolder "$STAGING" \
+            -ov -format UDZO \
+            "VoiceFlow-${VERSION}.dmg"
+          rm -rf "$STAGING"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "VoiceFlow-${VERSION}.zip" \
+            "VoiceFlow-${VERSION}.dmg" \
+            --title "VoiceFlow $VERSION" \
+            --generate-notes

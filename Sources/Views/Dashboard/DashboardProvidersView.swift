@@ -287,7 +287,7 @@ internal struct DashboardProvidersView: View {
                 .help("Refresh model list")
             }
 
-            Text("Cache: ~/.cache/huggingface/hub")
+            Text("Cache: \(displayHomeRelativePath(HuggingFaceCache.hubDirectory().path))")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
@@ -558,10 +558,7 @@ private struct MLXModelsSheet: View {
                         row(for: model)
                     }
                 } footer: {
-                    let hubPath = HuggingFaceCache.hubDirectory().path
-                    let home = FileManager.default.homeDirectoryForCurrentUser.path
-                    let displayPath = hubPath.hasPrefix(home) ? "~" + hubPath.dropFirst(home.count) : hubPath
-                    Text("Cache: \(displayPath)")
+                    Text("Cache: \(displayHomeRelativePath(HuggingFaceCache.hubDirectory().path))")
                 }
             }
             .listStyle(.inset)
@@ -570,7 +567,6 @@ private struct MLXModelsSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         isRefreshing = true
@@ -652,4 +648,18 @@ private struct MLXModelsSheet: View {
             selectedModelRepo = model.repo
         }
     }
+}
+
+private func displayHomeRelativePath(_ path: String) -> String {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+    if path == home {
+        return "~"
+    }
+
+    guard path.hasPrefix(home + "/") else {
+        return path
+    }
+
+    return "~" + path.dropFirst(home.count)
 }

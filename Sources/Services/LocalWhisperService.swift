@@ -24,11 +24,6 @@ private actor WhisperKitCache {
         // Create new instance
         progressCallback?("Preparing \(model.displayName) model...")
 
-        // Set environment variables to ensure offline operation
-        setenv("HF_HUB_OFFLINE", "1", 1)
-        setenv("TRANSFORMERS_OFFLINE", "1", 1)
-        setenv("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1", 1)
-
         // Always use explicit local model path to avoid WhisperKit checking default locations (like ~/Documents)
         guard let localModelPath = getLocalModelPath(for: model) else {
             throw LocalWhisperError.modelNotDownloaded
@@ -37,7 +32,9 @@ private actor WhisperKitCache {
         let newInstance: WhisperKit
         do {
             let config = WhisperKitConfig(modelFolder: localModelPath)
-            newInstance = try await WhisperKit(config)
+            newInstance = try await HuggingFaceEnvironment.withOfflineModelLoadingEnvironment {
+                try await WhisperKit(config)
+            }
         } catch {
             // If WhisperKit fails due to network issues, provide a more helpful error
             if error.localizedDescription.contains("offline") ||

@@ -4,6 +4,36 @@ import XCTest
 
 @MainActor
 final class MLXModelManagerTests: XCTestCase {
+    private let environmentKeys = [
+        "HF_HUB_OFFLINE",
+        "TRANSFORMERS_OFFLINE",
+        "HF_HUB_DISABLE_IMPLICIT_TOKEN",
+    ]
+    private var originalEnvironmentValues: [String: String?] = [:]
+
+    override func setUp() {
+        super.setUp()
+
+        originalEnvironmentValues = [:]
+        for key in environmentKeys {
+            originalEnvironmentValues[key] = HuggingFaceEnvironment.currentValue(for: key)
+        }
+    }
+
+    override func tearDown() {
+        for key in environmentKeys {
+            let originalValue = originalEnvironmentValues[key] ?? nil
+            if let originalValue {
+                setenv(key, originalValue, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+
+        originalEnvironmentValues = [:]
+        super.tearDown()
+    }
+
     func testRefreshModelListFindsModelsInsideHubCache() async throws {
         let cacheRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -71,27 +101,118 @@ final class MLXModelManagerTests: XCTestCase {
         }
     }
 
-    func testFormattedDownloadFailurePrefersDetailedMessage() {
-        let message = MLXModelManager.formattedDownloadFailure(
-            detailedMessage: "RepositoryNotFoundError: model missing",
-            exitStatus: 1
+    func testDownloadProcessEnvironmentClearsOfflineFlags() {
+        let cacheRoot = URL(fileURLWithPath: "/tmp/whisp-hf-cache", isDirectory: true)
+        let environment = HuggingFaceEnvironment.downloadProcessEnvironment(
+            base: [
+                "PATH": "/usr/bin",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+            ],
+            cacheDirectory: cacheRoot
         )
 
-        XCTAssertEqual(message, "Error: RepositoryNotFoundError: model missing")
+        XCTAssertEqual(environment["PATH"], "/usr/bin")
+        XCTAssertNil(environment["HF_HUB_OFFLINE"])
+        XCTAssertNil(environment["TRANSFORMERS_OFFLINE"])
+        XCTAssertEqual(environment["HF_HOME"], cacheRoot.path)
+        XCTAssertEqual(environment["HF_HUB_CACHE"], "\(cacheRoot.path)/hub")
     }
 
-    func testFormattedDownloadFailurePreservesExistingErrorPrefix() {
-        let message = MLXModelManager.formattedDownloadFailure(
-            detailedMessage: "Error: SSL certificate verify failed",
-            exitStatus: 1
+    func testOfflineModelLoadingEnvironmentRestoresPreviousValues() async throws {
+        setenv("HF_HUB_OFFLINE", "0", 1)
+        unsetenv("TRANSFORMERS_OFFLINE")
+        unsetenv("HF_HUB_DISABLE_IMPLICIT_TOKEN")
+
+        try await HuggingFaceEnvironment.withOfflineModelLoadingEnvironment {
+            XCTAssertEqual(HuggingFaceEnvironment.currentValue(for: "HF_HUB_OFFLINE"), "1")
+            XCTAssertEqual(HuggingFaceEnvironment.currentValue(for: "TRANSFORMERS_OFFLINE"), "1")
+            XCTAssertEqual(HuggingFaceEnvironment.currentValue(for: "HF_HUB_DISABLE_IMPLICIT_TOKEN"), "1")
+        }
+
+        XCTAssertEqual(HuggingFaceEnvironment.currentValue(for: "HF_HUB_OFFLINE"), "0")
+        XCTAssertNil(HuggingFaceEnvironment.currentValue(for: "TRANSFORMERS_OFFLINE"))
+        XCTAssertNil(HuggingFaceEnvironment.currentValue(for: "HF_HUB_DISABLE_IMPLICIT_TOKEN"))
+    }
+
+    func testCurrentValuePreservesEmptyString() {
+        setenv("HF_HUB_OFFLINE", "", 1)
+
+        XCTAssertEqual(HuggingFaceEnvironment.currentValue(for: "HF_HUB_OFFLINE"), "")
+    }
+
+    func testOfflineModelLoadingEnvironmentSerializesConcurrentOperations() async throws {
+        let firstStarted = expectation(description: "first operation started")
+        let releaseFirstOperation = TestGate()
+        let secondStarted = TestFlag()
+
+        let firstTask = Task {
+            try await HuggingFaceEnvironment.withOfflineModelLoadingEnvironment {
+                firstStarted.fulfill()
+                await releaseFirstOperation.wait()
+            }
+        }
+
+        await fulfillment(of: [firstStarted], timeout: 1.0)
+
+        let secondTask = Task {
+            try await HuggingFaceEnvironment.withOfflineModelLoadingEnvironment {
+                await secondStarted.setTrue()
+            }
+        }
+
+        try await Task.sleep(for: .milliseconds(50))
+        let secondStartedBeforeRelease = await secondStarted.currentValue()
+        XCTAssertFalse(secondStartedBeforeRelease)
+
+        await releaseFirstOperation.open()
+        _ = try await firstTask.value
+        _ = try await secondTask.value
+
+        let secondStartedAfterRelease = await secondStarted.currentValue()
+        XCTAssertTrue(secondStartedAfterRelease)
+    }
+
+    func testTerminalStatusMessagePreservesDetailedErrors() {
+        XCTAssertEqual(
+            MLXModelManager.terminalStatusMessage(
+                existingStatus: "Error: LocalEntryNotFoundError: snapshot missing",
+                exitStatus: 1
+            ),
+            "Error: LocalEntryNotFoundError: snapshot missing"
         )
+        XCTAssertEqual(
+            MLXModelManager.terminalStatusMessage(
+                existingStatus: "Downloading model files...", exitStatus: 2),
+            "Error: Download failed (exit code: 2)"
+        )
+        XCTAssertNil(MLXModelManager.terminalStatusMessage(existingStatus: nil, exitStatus: 0))
+    }
+}
 
-        XCTAssertEqual(message, "Error: SSL certificate verify failed")
+private actor TestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
     }
 
-    func testFormattedDownloadFailureFallsBackToExitCode() {
-        let message = MLXModelManager.formattedDownloadFailure(detailedMessage: nil, exitStatus: 1)
+    func open() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
 
-        XCTAssertEqual(message, "Error: Download failed (exit code: 1)")
+private actor TestFlag {
+    private(set) var value = false
+
+    func setTrue() {
+        value = true
+    }
+
+    func currentValue() -> Bool {
+        value
     }
 }

@@ -141,3 +141,4 @@ Benchmarks/fixtures/*
 Benchmarks/results/*
 !Benchmarks/results/.gitkeep
 !Benchmarks/results/README.md
+tasks/

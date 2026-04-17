@@ -206,6 +206,7 @@ internal struct FloatingMicrophoneDockView: View {
         PressAndHoldConfiguration.defaults.enabled
     @AppStorage(AppDefaults.Keys.pressAndHoldKeyIdentifier) private var pressAndHoldKeyIdentifier =
         PressAndHoldConfiguration.defaults.key.rawValue
+    @State private var isPrimaryButtonHovered = false
 
     let onPrimaryAction: () -> Void
     let onCancelAction: () -> Void
@@ -253,7 +254,7 @@ internal struct FloatingMicrophoneDockView: View {
     }
 
     private var collapsedDock: some View {
-        Button(action: onSettingsAction) {
+        Button(action: onPrimaryAction) {
             RoundedRectangle(cornerRadius: 3.5, style: .continuous)
                 .fill(handleFill)
                 .overlay(
@@ -265,12 +266,12 @@ internal struct FloatingMicrophoneDockView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
         .buttonStyle(.plain)
-        .help("Open Whisp settings")
+        .help("Click to start dictating")
     }
 
     private var expandedDock: some View {
         VStack(spacing: 8) {
-            Button(action: onPrimaryAction) {
+            Button(action: onSettingsAction) {
                 Text(primaryText)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(text)
@@ -279,12 +280,21 @@ internal struct FloatingMicrophoneDockView: View {
                     .frame(minWidth: 300)
                     .frame(height: 44)
                     .background(capsuleBackground)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!viewModel.isPrimaryActionEnabled)
-            .help(primaryButtonHelp)
+            .onHover { isHovering in
+                isPrimaryButtonHovered = isHovering
+            }
 
             dotsPill
+        }
+        .overlay(alignment: .top) {
+            if isPrimaryButtonHovered {
+                primaryTooltip
+                    .offset(y: -46)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
@@ -382,7 +392,7 @@ internal struct FloatingMicrophoneDockView: View {
     }
 
     private var dotsPill: some View {
-        Button(action: onSettingsAction) {
+        Button(action: onPrimaryAction) {
             HStack(spacing: 4) {
                 ForEach(0..<8, id: \.self) { _ in
                     Circle()
@@ -395,7 +405,8 @@ internal struct FloatingMicrophoneDockView: View {
             .background(smallCapsuleBackground)
         }
         .buttonStyle(.plain)
-        .help("Open Whisp settings")
+        .disabled(!viewModel.isPrimaryActionEnabled)
+        .help("Click to start dictating")
     }
 
     private var selectedPressAndHoldKey: PressAndHoldKey {
@@ -452,6 +463,25 @@ internal struct FloatingMicrophoneDockView: View {
         default:
             return "Start dictation"
         }
+    }
+
+    private var primaryTooltip: some View {
+        Text(primaryButtonHelp)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Color.white.opacity(0.94))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.black.opacity(0.92))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
+                    )
+            )
+            .shadow(color: .black.opacity(0.22), radius: 12, y: 6)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private var accessibilityLabel: String {

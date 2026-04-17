@@ -47,7 +47,7 @@ internal enum AppDefaults {
 
     // Chosen defaults.
     internal static let defaultTranscriptionProvider: TranscriptionProvider = .local
-    internal static let defaultWhisperModel: WhisperModel = .base
+    internal static let defaultWhisperModel: WhisperModel = .small
     internal static let defaultParakeetModel: ParakeetModel = .v3Multilingual
     internal static let defaultSemanticCorrectionMode: SemanticCorrectionMode = .off
     internal static let defaultSemanticCorrectionModelRepo: String = "mlx-community/Qwen3-1.7B-4bit"

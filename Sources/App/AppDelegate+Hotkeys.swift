@@ -31,18 +31,37 @@ extension AppDelegate {
             return
         }
 
+        let inputMonitoringPermissionManager = InputMonitoringPermissionManager()
+        let inputMonitoringGranted = inputMonitoringPermissionManager.checkPermission()
+
+        PressAndHoldHotkeyPreferenceStore.syncForConfiguration(
+            newConfiguration,
+            inputMonitoringGranted: inputMonitoringGranted
+        )
+
+        guard inputMonitoringGranted else {
+            Logger.app.info(
+                "Press-and-hold monitor not started because Input Monitoring permission is not granted. Whisp will keep the floating dock available and wait for explicit permission setup."
+            )
+            return
+        }
+
         let monitor = PressAndHoldKeyMonitor(
             configuration: newConfiguration,
             keyDownHandler: { [weak self] in
                 self?.handlePressAndHoldKeyDown()
             },
-            keyUpHandler: pressAndHoldKeyUpHandler(for: newConfiguration)
+            keyUpHandler: pressAndHoldKeyUpHandler(for: newConfiguration),
+            readinessHandler: { readiness, message in
+                PressAndHoldHotkeyPreferenceStore.setReadiness(readiness, message: message)
+            },
+            inputMonitoringPermissionManager: inputMonitoringPermissionManager
         )
 
         pressAndHoldMonitor = monitor
         if !monitor.start() {
             Logger.app.info(
-                "Press-and-hold monitor not started because Accessibility permission is not granted. Whisp will keep the floating dock available and wait for explicit permission setup."
+                "Press-and-hold monitor failed to start. Check Input Monitoring permissions."
             )
         }
     }

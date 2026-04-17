@@ -19,6 +19,12 @@ internal struct DashboardRecordingView: View {
         FnGlobeHotkeyReadiness
         .requiresAcknowledgement.rawValue
     @AppStorage(AppDefaults.Keys.pressAndHoldFnFailureMessage) private var pressAndHoldFnFailureMessage = ""
+    @AppStorage(AppDefaults.Keys.pressAndHoldModifierReadiness) private
+        var pressAndHoldModifierReadinessRaw =
+        PressAndHoldHotkeyReadiness
+        .requiresInputMonitoring.rawValue
+    @AppStorage(AppDefaults.Keys.pressAndHoldModifierFailureMessage) private
+        var pressAndHoldModifierFailureMessage = ""
 
     @State private var availableMicrophones: [AVCaptureDevice] = []
     @State private var previousPressAndHoldKeyIdentifier = PressAndHoldConfiguration.defaults.key.rawValue
@@ -81,6 +87,8 @@ internal struct DashboardRecordingView: View {
 
                     if isFnGlobeSelected {
                         fnGlobeSetupSection
+                    } else if pressAndHoldEnabled {
+                        modifierKeySetupSection
                     }
                 }
             } header: {
@@ -153,6 +161,42 @@ internal struct DashboardRecordingView: View {
         .padding(.top, 4)
     }
 
+    @ViewBuilder
+    private var modifierKeySetupSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(modifierKeyStatusTitle, systemImage: modifierKeyStatusIcon)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(modifierKeyStatusColor)
+
+            Text(modifierKeyStatusMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                if modifierKeyReadiness == .requiresInputMonitoring {
+                    Button("Grant Access") {
+                        _ = inputMonitoringPermissionManager.requestPermission()
+                        refreshModifierKeySetup()
+                    }
+                }
+
+                if modifierKeyReadiness == .requiresInputMonitoring
+                    || modifierKeyReadiness == .awaitingVerification
+                    || modifierKeyReadiness == .unavailable
+                {
+                    Button("Open Settings") {
+                        inputMonitoringPermissionManager.openSystemSettings()
+                    }
+
+                    Button("Refresh Status") {
+                        refreshModifierKeySetup()
+                    }
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
     private var selectedPressAndHoldKey: PressAndHoldKey {
         PressAndHoldKey(rawValue: pressAndHoldKeyIdentifier) ?? PressAndHoldConfiguration.defaults.key
     }
@@ -212,6 +256,39 @@ internal struct DashboardRecordingView: View {
         }
     }
 
+    // MARK: - Modifier Key Readiness
+
+    private var modifierKeyReadiness: PressAndHoldHotkeyReadiness {
+        PressAndHoldHotkeyReadiness(rawValue: pressAndHoldModifierReadinessRaw)
+            ?? .requiresInputMonitoring
+    }
+
+    private var modifierKeyStatusTitle: String {
+        modifierKeyReadiness.title
+    }
+
+    private var modifierKeyStatusIcon: String {
+        modifierKeyReadiness.statusSymbolName
+    }
+
+    private var modifierKeyStatusColor: Color {
+        switch modifierKeyReadiness {
+        case .ready:
+            return Color(nsColor: .systemGreen)
+        case .unavailable:
+            return Color(nsColor: .systemRed)
+        default:
+            return Color(nsColor: .systemOrange)
+        }
+    }
+
+    private var modifierKeyStatusMessage: String {
+        PressAndHoldHotkeyPreferenceStore.message(
+            for: modifierKeyReadiness,
+            failureMessage: pressAndHoldModifierFailureMessage
+        )
+    }
+
     private func loadMicrophones() {
         let discoverySession = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone],
@@ -249,6 +326,21 @@ internal struct DashboardRecordingView: View {
         guard configuration.isFnGlobeEnabled else { return }
 
         FnGlobeHotkeyPreferenceStore.syncForConfiguration(
+            configuration,
+            inputMonitoringGranted: inputMonitoringPermissionManager.checkPermission()
+        )
+
+        if notify {
+            NotificationCenter.default.post(name: .pressAndHoldSettingsChanged, object: configuration)
+        }
+    }
+
+    private func refreshModifierKeySetup(notify: Bool = true) {
+        let configuration = currentPressAndHoldConfiguration
+
+        guard configuration.enabled, !configuration.isFnGlobeEnabled else { return }
+
+        PressAndHoldHotkeyPreferenceStore.syncForConfiguration(
             configuration,
             inputMonitoringGranted: inputMonitoringPermissionManager.checkPermission()
         )

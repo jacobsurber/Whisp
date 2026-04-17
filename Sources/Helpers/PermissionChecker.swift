@@ -12,7 +12,6 @@ internal class PermissionChecker {
         )
         let needsAccessibility =
             UserDefaults.standard.bool(forKey: AppDefaults.Keys.enableSmartPaste)
-            || configuration.requiresAccessibilityPermission
 
         if needsInputMonitoring {
             let inputMonitoringPermissionManager = InputMonitoringPermissionManager()

@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 import os.log
 
@@ -81,6 +82,20 @@ internal enum PressAndHoldKey: String, CaseIterable, Identifiable {
             return .function
         }
     }
+
+    /// The CGEventFlags mask for this key's modifier family.
+    var cgEventFlagsMask: CGEventFlags {
+        switch self {
+        case .rightCommand, .leftCommand:
+            return .maskCommand
+        case .rightOption, .leftOption:
+            return .maskAlternate
+        case .rightControl, .leftControl:
+            return .maskControl
+        case .globe:
+            return .maskSecondaryFn
+        }
+    }
 }
 
 internal struct PressAndHoldConfiguration: Equatable {
@@ -93,11 +108,13 @@ internal struct PressAndHoldConfiguration: Equatable {
     }
 
     var requiresAccessibilityPermission: Bool {
-        enabled && key != .globe
+        false
     }
 
     func requiresInputMonitoringPermission(warningAcknowledged: Bool) -> Bool {
-        isFnGlobeEnabled && warningAcknowledged
+        guard enabled else { return false }
+        if isFnGlobeEnabled { return warningAcknowledged }
+        return true
     }
 
     static let defaults = PressAndHoldConfiguration(
@@ -157,52 +174,166 @@ internal enum PressAndHoldSettings {
     }
 }
 
+// MARK: - Modifier Key Readiness
+
+internal enum PressAndHoldHotkeyReadiness: String {
+    case requiresInputMonitoring
+    case awaitingVerification
+    case ready
+    case unavailable
+
+    var title: String {
+        switch self {
+        case .requiresInputMonitoring:
+            return "Grant Input Monitoring"
+        case .awaitingVerification:
+            return "Verify key capture"
+        case .ready:
+            return "Key ready"
+        case .unavailable:
+            return "Key unavailable"
+        }
+    }
+
+    var statusSymbolName: String {
+        switch self {
+        case .ready:
+            return "checkmark.circle.fill"
+        case .unavailable:
+            return "xmark.octagon.fill"
+        default:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+private enum PressAndHoldHotkeyCopy {
+    static let inputMonitoringSetupMessage =
+        "Grant Input Monitoring so Whisp can detect the selected modifier key. If Whisp still cannot see the key after granting access, quit and reopen the app."
+    static let verificationSetupMessage =
+        "Hold the selected modifier key until Whisp starts recording."
+    static let readyMessage =
+        "Modifier key capture is ready. You can use it as your recording trigger."
+    static let startupUnavailableMessage =
+        "Whisp could not start modifier key capture on this Mac."
+    static let tapDisabledMessage =
+        "Modifier key capture stopped responding. Reopen settings and refresh permissions."
+    static let recoveredTapMessage =
+        "Modifier key capture recovered after a system interruption. Try the key again if the last press was missed."
+}
+
+internal enum PressAndHoldHotkeyPreferenceStore {
+    static func readiness(using defaults: UserDefaults = .standard) -> PressAndHoldHotkeyReadiness {
+        let rawValue =
+            defaults.string(forKey: AppDefaults.Keys.pressAndHoldModifierReadiness)
+            ?? PressAndHoldHotkeyReadiness.requiresInputMonitoring.rawValue
+        return PressAndHoldHotkeyReadiness(rawValue: rawValue) ?? .requiresInputMonitoring
+    }
+
+    static func failureMessage(using defaults: UserDefaults = .standard) -> String {
+        defaults.string(forKey: AppDefaults.Keys.pressAndHoldModifierFailureMessage) ?? ""
+    }
+
+    static func setReadiness(
+        _ readiness: PressAndHoldHotkeyReadiness,
+        message: String? = nil,
+        using defaults: UserDefaults = .standard
+    ) {
+        defaults.set(readiness.rawValue, forKey: AppDefaults.Keys.pressAndHoldModifierReadiness)
+        defaults.set(message ?? "", forKey: AppDefaults.Keys.pressAndHoldModifierFailureMessage)
+        defaults.synchronize()
+    }
+
+    static func syncForConfiguration(
+        _ configuration: PressAndHoldConfiguration,
+        inputMonitoringGranted: Bool,
+        using defaults: UserDefaults = .standard
+    ) {
+        guard configuration.enabled, !configuration.isFnGlobeEnabled else { return }
+
+        guard inputMonitoringGranted else {
+            setReadiness(
+                .requiresInputMonitoring,
+                message: PressAndHoldHotkeyCopy.inputMonitoringSetupMessage,
+                using: defaults
+            )
+            return
+        }
+
+        if readiness(using: defaults) != .ready {
+            setReadiness(
+                .awaitingVerification,
+                message: PressAndHoldHotkeyCopy.verificationSetupMessage,
+                using: defaults
+            )
+        }
+    }
+
+    static func message(for readiness: PressAndHoldHotkeyReadiness, failureMessage: String = "") -> String {
+        if !failureMessage.isEmpty {
+            return failureMessage
+        }
+
+        return readiness.title
+    }
+}
+
+// MARK: - Modifier Key Monitor
+
 /// Observes global keyboard events so that modifier-only keys (e.g. right command)
-/// can trigger recording. Uses NSEvent global monitors, which continue to fire even
-/// when the app is not focused.
+/// can trigger recording. Uses a CGEventTap at the HID level, which captures events
+/// regardless of which app is focused.
 internal final class PressAndHoldKeyMonitor {
-    typealias EventMonitorFactory = (NSEvent.EventTypeMask, @escaping (NSEvent) -> Void) -> Any?
-    typealias EventMonitorRemoval = (Any) -> Void
+    internal enum SemanticEvent {
+        case modifierKeyChanged(isPressed: Bool)
+        case otherKeyPressed
+        case tapDisabled
+    }
+
+    typealias ReadinessHandler = (PressAndHoldHotkeyReadiness, String) -> Void
 
     private let configuration: PressAndHoldConfiguration
     private let keyDownHandler: () -> Void
     private let keyUpHandler: (() -> Void)?
-    private let addGlobalMonitor: EventMonitorFactory
-    private let removeMonitor: EventMonitorRemoval
+    private let readinessHandler: ReadinessHandler
+    private let inputMonitoringPermissionManager: InputMonitoringPermissionManager
+    private let holdDelay: TimeInterval
 
-    typealias PermissionCheck = () -> Bool
+    private static let eventMask =
+        CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+        | CGEventMask(1 << CGEventType.keyDown.rawValue)
+        | CGEventMask(1 << CGEventType.tapDisabledByTimeout.rawValue)
+        | CGEventMask(1 << CGEventType.tapDisabledByUserInput.rawValue)
 
-    private var flagsMonitor: Any?
-    private var keyDownMonitor: Any?
-    private var keyUpMonitor: Any?
-    private let monitorQueue = DispatchQueue(label: "com.whisp.pressAndHoldMonitor")
-    private let checkPermission: PermissionCheck
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var pendingActivationWorkItem: DispatchWorkItem?
+    private var isKeyCurrentlyDown = false
+    private var isCaptureActive = false
+    private var isKeyPartOfCombination = false
+    private var hasVerifiedCapture = false
 
-    private var isPressed = false
-
-    // Stuck state recovery: if key remains "pressed" for too long, auto-release
+    // Stuck state recovery: if key remains held for too long, auto-release
     private var stuckStateTimeoutTask: Task<Void, Never>?
-    private let stuckStateTimeout: TimeInterval = 120.0  // 2 minutes max hold time
+    private let stuckStateTimeout: TimeInterval = 120.0
 
     init(
         configuration: PressAndHoldConfiguration,
         keyDownHandler: @escaping () -> Void,
         keyUpHandler: (() -> Void)? = nil,
-        addGlobalMonitor: @escaping EventMonitorFactory = NSEvent.addGlobalMonitorForEvents(
-            matching:handler:),
-        removeMonitor: @escaping EventMonitorRemoval = NSEvent.removeMonitor(_:),
-        checkPermission: @escaping PermissionCheck = { AXIsProcessTrusted() }
+        readinessHandler: @escaping ReadinessHandler = { _, _ in },
+        inputMonitoringPermissionManager: InputMonitoringPermissionManager =
+            InputMonitoringPermissionManager(),
+        holdDelay: TimeInterval = 0.12
     ) {
         self.configuration = configuration
         self.keyDownHandler = keyDownHandler
         self.keyUpHandler = keyUpHandler
-        self.addGlobalMonitor = addGlobalMonitor
-        self.removeMonitor = removeMonitor
-        self.checkPermission = checkPermission
+        self.readinessHandler = readinessHandler
+        self.inputMonitoringPermissionManager = inputMonitoringPermissionManager
+        self.holdDelay = holdDelay
     }
 
-    /// Whether the monitor was able to install event listeners.
-    /// Returns `false` when Accessibility permission is denied (monitors silently fail).
     @discardableResult
     func start() -> Bool {
         stop()
@@ -214,47 +345,55 @@ internal final class PressAndHoldKeyMonitor {
             return false
         }
 
-        if !checkPermission() {
-            Logger.app.warning(
-                "Press-and-hold monitor cannot start: Accessibility permission not granted. Global key monitors require Privacy & Security → Accessibility."
+        guard inputMonitoringPermissionManager.checkPermission() else {
+            readinessHandler(
+                .requiresInputMonitoring,
+                PressAndHoldHotkeyCopy.inputMonitoringSetupMessage
             )
             return false
         }
 
-        let modifierFlag = configuration.key.modifierFlag
-        if modifierFlag == .command || modifierFlag == .option || modifierFlag == .control
-            || modifierFlag == .function
-        {
-            flagsMonitor = addGlobalMonitor(.flagsChanged) { [weak self] event in
-                self?.handleModifierEvent(event)
-            }
-        } else {
-            keyDownMonitor = addGlobalMonitor(.keyDown) { [weak self] event in
-                self?.handleKeyEvent(event, isKeyDown: true)
-            }
-            keyUpMonitor = addGlobalMonitor(.keyUp) { [weak self] event in
-                self?.handleKeyEvent(event, isKeyDown: false)
-            }
+        let userInfo = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        guard
+            let eventTap = CGEvent.tapCreate(
+                tap: .cghidEventTap,
+                place: .headInsertEventTap,
+                options: .listenOnly,
+                eventsOfInterest: Self.eventMask,
+                callback: Self.eventTapCallback,
+                userInfo: userInfo
+            )
+        else {
+            readinessHandler(
+                .unavailable,
+                PressAndHoldHotkeyCopy.startupUnavailableMessage
+            )
+            return false
         }
+
+        self.eventTap = eventTap
+        self.runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+
+        if let runLoopSource {
+            CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+
+        if !hasVerifiedCapture {
+            readinessHandler(
+                .awaitingVerification,
+                PressAndHoldHotkeyCopy.verificationSetupMessage
+            )
+        }
+
         return true
     }
 
     func stop() {
-        if let monitor = flagsMonitor {
-            removeMonitor(monitor)
-            flagsMonitor = nil
-        }
-        if let monitor = keyDownMonitor {
-            removeMonitor(monitor)
-            keyDownMonitor = nil
-        }
-        if let monitor = keyUpMonitor {
-            removeMonitor(monitor)
-            keyUpMonitor = nil
-        }
-        isPressed = false
-
-        // Clean up timeout task
+        resetPendingState()
+        endCaptureIfNeeded()
+        removeEventTap()
         cancelStuckStateRecovery()
     }
 
@@ -262,69 +401,216 @@ internal final class PressAndHoldKeyMonitor {
         stop()
     }
 
-    private func handleModifierEvent(_ event: NSEvent) {
-        guard event.type == .flagsChanged, event.keyCode == configuration.key.keyCode else { return }
+    // MARK: - Semantic Event Processing
 
-        monitorQueue.async { [weak self] in
-            self?.processTransition(isKeyDownEvent: !(self?.isPressed ?? false))
+    func processSemanticEvent(_ event: SemanticEvent) {
+        switch event {
+        case .modifierKeyChanged(let isPressed):
+            if isPressed {
+                guard !isKeyCurrentlyDown else { return }
+                isKeyCurrentlyDown = true
+                isKeyPartOfCombination = false
+                scheduleActivation()
+            } else {
+                guard isKeyCurrentlyDown || isCaptureActive else { return }
+                resetPendingState()
+                endCaptureIfNeeded()
+            }
+
+        case .otherKeyPressed:
+            guard isKeyCurrentlyDown, !isCaptureActive else { return }
+            isKeyPartOfCombination = true
+            cancelPendingActivation()
+
+        case .tapDisabled:
+            resetPendingState()
+            endCaptureIfNeeded()
+
+            readinessHandler(
+                .unavailable,
+                PressAndHoldHotkeyCopy.tapDisabledMessage
+            )
         }
     }
 
-    private func handleKeyEvent(_ event: NSEvent, isKeyDown: Bool) {
-        guard event.keyCode == configuration.key.keyCode else { return }
+    func activateKeyIfEligible() {
+        guard isKeyCurrentlyDown, !isKeyPartOfCombination, !isCaptureActive else { return }
+        isCaptureActive = true
 
-        if isKeyDown, event.isARepeat {
+        startStuckStateRecovery()
+
+        if !hasVerifiedCapture {
+            hasVerifiedCapture = true
+            readinessHandler(.ready, PressAndHoldHotkeyCopy.readyMessage)
+        }
+
+        notifyKeyDown()
+    }
+
+    // MARK: - Event Handling
+
+    func handleFlagsChanged(keyCode: Int64, flags: CGEventFlags) {
+        let monitoredKey = configuration.key
+
+        guard keyCode == Int64(monitoredKey.keyCode) else {
+            // Another modifier key changed while ours is pending — treat as combination
+            if isKeyCurrentlyDown, !isCaptureActive,
+                hasAdditionalModifierFlags(flags, excluding: monitoredKey)
+            {
+                processSemanticEvent(.otherKeyPressed)
+            }
             return
         }
 
-        monitorQueue.async { [weak self] in
-            self?.processTransition(isKeyDownEvent: isKeyDown)
+        // Our key changed state. A flagsChanged event with our keyCode means
+        // this physical key toggled. Determine direction from tracked state.
+        let isPressed = !isKeyCurrentlyDown
+        processSemanticEvent(.modifierKeyChanged(isPressed: isPressed))
+    }
+
+    func handleKeyDown(keyCode: Int64) {
+        guard isKeyCurrentlyDown else { return }
+        // Any non-modifier key pressed while our modifier is down = combination
+        processSemanticEvent(.otherKeyPressed)
+    }
+
+    // MARK: - Private
+
+    private func scheduleActivation() {
+        cancelPendingActivation()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.activateKeyIfEligible()
+        }
+
+        pendingActivationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: workItem)
+    }
+
+    private func cancelPendingActivation() {
+        pendingActivationWorkItem?.cancel()
+        pendingActivationWorkItem = nil
+    }
+
+    private func resetPendingState() {
+        cancelPendingActivation()
+        isKeyCurrentlyDown = false
+        isKeyPartOfCombination = false
+    }
+
+    private func endCaptureIfNeeded() {
+        guard isCaptureActive else { return }
+
+        isCaptureActive = false
+        cancelStuckStateRecovery()
+
+        guard let keyUpHandler else { return }
+        Task { @MainActor in
+            keyUpHandler()
         }
     }
 
-    func processTransition(isKeyDownEvent: Bool) {
-        if isKeyDownEvent {
-            guard !isPressed else { return }
-            isPressed = true
-
-            // Start stuck state recovery timeout
-            startStuckStateRecovery()
-
-            Task { @MainActor [keyDownHandler] in
-                keyDownHandler()
-            }
-        } else {
-            guard isPressed else { return }
-            isPressed = false
-
-            // Cancel stuck state recovery since key was properly released
-            cancelStuckStateRecovery()
-
-            guard let keyUpHandler else { return }
-            Task { @MainActor in
-                keyUpHandler()
-            }
+    private func notifyKeyDown() {
+        Task { @MainActor [keyDownHandler] in
+            keyDownHandler()
         }
+    }
+
+    private func removeEventTap() {
+        if let runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+            self.runLoopSource = nil
+        }
+
+        if let eventTap {
+            CFMachPortInvalidate(eventTap)
+            self.eventTap = nil
+        }
+    }
+
+    private func hasAdditionalModifierFlags(
+        _ flags: CGEventFlags, excluding key: PressAndHoldKey
+    ) -> Bool {
+        var combinationMask: CGEventFlags = [
+            .maskShift,
+            .maskControl,
+            .maskAlternate,
+            .maskCommand,
+        ]
+
+        // Exclude our own key's modifier so we don't flag ourselves
+        combinationMask.remove(key.cgEventFlagsMask)
+
+        return !flags.intersection(combinationMask).isEmpty
+    }
+
+    private func handleTapDisabled() {
+        resetPendingState()
+        endCaptureIfNeeded()
+
+        guard let eventTap else {
+            readinessHandler(
+                .unavailable,
+                PressAndHoldHotkeyCopy.tapDisabledMessage
+            )
+            return
+        }
+
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+
+        readinessHandler(
+            hasVerifiedCapture ? .ready : .awaitingVerification,
+            hasVerifiedCapture
+                ? PressAndHoldHotkeyCopy.recoveredTapMessage
+                : PressAndHoldHotkeyCopy.verificationSetupMessage
+        )
+    }
+
+    private func handleEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        switch type {
+        case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            handleTapDisabled()
+
+        case .flagsChanged:
+            handleFlagsChanged(
+                keyCode: event.getIntegerValueField(.keyboardEventKeycode),
+                flags: event.flags
+            )
+
+        case .keyDown:
+            handleKeyDown(keyCode: event.getIntegerValueField(.keyboardEventKeycode))
+
+        default:
+            break
+        }
+
+        return Unmanaged.passUnretained(event)
     }
 
     private func startStuckStateRecovery() {
-        // Cancel any existing timeout
         stuckStateTimeoutTask?.cancel()
 
-        // Start new timeout
         stuckStateTimeoutTask = Task { [weak self, stuckStateTimeout] in
             try? await Task.sleep(nanoseconds: UInt64(stuckStateTimeout * 1_000_000_000))
 
-            // If not cancelled and still pressed, force release
-            guard let self = self, self.isPressed else { return }
+            guard let self = self, self.isCaptureActive else { return }
 
             Logger.app.warning("Press-and-hold key stuck for \(stuckStateTimeout)s - auto-releasing")
-            self.processTransition(isKeyDownEvent: false)
+            self.processSemanticEvent(.modifierKeyChanged(isPressed: false))
         }
     }
 
     private func cancelStuckStateRecovery() {
         stuckStateTimeoutTask?.cancel()
         stuckStateTimeoutTask = nil
+    }
+
+    private static let eventTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
+        guard let userInfo else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let monitor = Unmanaged<PressAndHoldKeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+        return monitor.handleEvent(type: type, event: event)
     }
 }

@@ -30,6 +30,9 @@ internal enum AppDefaults {
         static let pressAndHoldFnReadiness = "pressAndHoldFnReadiness"
         static let pressAndHoldFnFailureMessage = "pressAndHoldFnFailureMessage"
 
+        static let pressAndHoldModifierReadiness = "pressAndHoldModifierReadiness"
+        static let pressAndHoldModifierFailureMessage = "pressAndHoldModifierFailureMessage"
+
         static let hasCompletedWelcome = "hasCompletedWelcome"
         static let lastWelcomeVersion = "lastWelcomeVersion"
 

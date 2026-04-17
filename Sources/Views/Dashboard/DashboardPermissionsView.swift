@@ -108,7 +108,7 @@ internal struct DashboardPermissionsView: View {
                     Text("Input Monitoring")
                 } footer: {
                     Text(
-                        "Needed for the Fn/Globe hotkey. After granting access, click Refresh. If status does not update, restart Whisp."
+                        "Needed for hotkey detection. After granting access, click Refresh. If status does not update, restart Whisp."
                     )
                 }
             }
@@ -135,11 +135,11 @@ internal struct DashboardPermissionsView: View {
     }
 
     private var needsAccessibility: Bool {
-        enableSmartPaste || currentPressAndHoldConfiguration.requiresAccessibilityPermission
+        enableSmartPaste
     }
 
     private var needsInputMonitoring: Bool {
-        currentPressAndHoldConfiguration.isFnGlobeEnabled
+        currentPressAndHoldConfiguration.enabled
     }
 
     private var fnGlobeReadiness: FnGlobeHotkeyReadiness {
@@ -160,14 +160,6 @@ internal struct DashboardPermissionsView: View {
     }
 
     private var accessibilityFooterText: String {
-        if pressAndHoldEnabled && selectedPressAndHoldKey != .globe && enableSmartPaste {
-            return "Required for Press & Hold key detection and Smart Paste."
-        }
-
-        if pressAndHoldEnabled && selectedPressAndHoldKey != .globe {
-            return "Required for Command, Option, or Control press-and-hold detection."
-        }
-
         return "Optional. Required only for Smart Paste to type into other apps."
     }
 

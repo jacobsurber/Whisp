@@ -4,13 +4,9 @@ import XCTest
 @testable import Whisp
 
 final class PressAndHoldKeyMonitorTests: XCTestCase {
-    private var addedEvents: [(NSEvent.EventTypeMask, (NSEvent) -> Void)] = []
-    private var removedEvents: [Any] = []
     private var defaultsSuiteNames: [String] = []
 
     override func tearDown() {
-        addedEvents.removeAll()
-        removedEvents.removeAll()
         defaultsSuiteNames.forEach { UserDefaults.standard.removePersistentDomain(forName: $0) }
         defaultsSuiteNames.removeAll()
         super.tearDown()
@@ -18,27 +14,21 @@ final class PressAndHoldKeyMonitorTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// Creates a monitor for direct semantic-event testing (bypasses CGEventTap).
+    /// Hold delay is set to zero so `scheduleActivation` fires on the next run-loop tick,
+    /// but most tests call `activateKeyIfEligible()` explicitly for determinism.
     private func makeMonitor(
         configuration: PressAndHoldConfiguration,
         keyDownHandler: @escaping () -> Void = {},
-        keyUpHandler: (() -> Void)? = nil
+        keyUpHandler: (() -> Void)? = nil,
+        readinessHandler: @escaping PressAndHoldKeyMonitor.ReadinessHandler = { _, _ in }
     ) -> PressAndHoldKeyMonitor {
-        let addMonitor: PressAndHoldKeyMonitor.EventMonitorFactory = { [weak self] mask, handler in
-            self?.addedEvents.append((mask, handler))
-            return self?.addedEvents.count ?? 0
-        }
-
-        let removeMonitor: PressAndHoldKeyMonitor.EventMonitorRemoval = { [weak self] token in
-            self?.removedEvents.append(token)
-        }
-
-        return PressAndHoldKeyMonitor(
+        PressAndHoldKeyMonitor(
             configuration: configuration,
             keyDownHandler: keyDownHandler,
             keyUpHandler: keyUpHandler,
-            addGlobalMonitor: addMonitor,
-            removeMonitor: removeMonitor,
-            checkPermission: { true }
+            readinessHandler: readinessHandler,
+            holdDelay: 0
         )
     }
 
@@ -55,17 +45,14 @@ final class PressAndHoldKeyMonitorTests: XCTestCase {
         return defaults
     }
 
-    // MARK: - start()
-
-    func testStartRegistersFlagMonitorForModifierKey() {
-        let config = PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold)
-        let monitor = makeMonitor(configuration: config)
-
-        monitor.start()
-
-        XCTAssertEqual(addedEvents.count, 1)
-        XCTAssertEqual(addedEvents.first?.0, .flagsChanged)
+    /// Drains the main actor queue so Task { @MainActor } dispatches execute.
+    private func drainMainQueue() {
+        let done = expectation(description: "main queue drained")
+        DispatchQueue.main.async { done.fulfill() }
+        wait(for: [done], timeout: 1.0)
     }
+
+    // MARK: - PressAndHoldSettings
 
     func testConfigurationPreservesStoredGlobeSelection() {
         let defaults = makeDefaults()
@@ -116,76 +103,287 @@ final class PressAndHoldKeyMonitorTests: XCTestCase {
         )
     }
 
+    // MARK: - start()
+
     func testStartReturnsFalseForGlobeKey() {
         let monitor = makeMonitor(
             configuration: PressAndHoldConfiguration(enabled: true, key: .globe, mode: .hold)
         )
 
         XCTAssertFalse(monitor.start())
-        XCTAssertTrue(addedEvents.isEmpty)
     }
 
-    // MARK: - Transitions
+    // MARK: - Semantic Event Processing
 
-    func testKeyDownInvokesHandlerOnlyOnceUntilReleased() {
-        let expectationDown = expectation(description: "keyDown")
-        expectationDown.expectedFulfillmentCount = 2
-
+    func testKeyDownActivatesAndInvokesHandler() {
+        var keyDownCount = 0
         let monitor = makeMonitor(
             configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
-            keyDownHandler: {
-                expectationDown.fulfill()
-            }
+            keyDownHandler: { keyDownCount += 1 }
         )
 
-        monitor.processTransition(isKeyDownEvent: true)  // first press
-        monitor.processTransition(isKeyDownEvent: true)  // repeat press ignored
-        monitor.processTransition(isKeyDownEvent: false)  // release
-        monitor.processTransition(isKeyDownEvent: true)  // second press
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+        drainMainQueue()
 
-        wait(for: [expectationDown], timeout: 1.0)
+        XCTAssertEqual(keyDownCount, 1)
     }
 
-    func testKeyUpInvokesHandlerWhenConfigured() {
-        let expectationUp = expectation(description: "keyUp")
+    func testRepeatedKeyDownIgnoredWhilePressed() {
+        var keyDownCount = 0
+        let monitor = makeMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            keyDownHandler: { keyDownCount += 1 }
+        )
 
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))  // repeat — ignored
+        monitor.activateKeyIfEligible()  // already active — no-op
+        drainMainQueue()
+
+        XCTAssertEqual(keyDownCount, 1)
+    }
+
+    func testKeyUpInvokesHandlerWhenActive() {
+        let expectationUp = expectation(description: "keyUp")
         let monitor = makeMonitor(
             configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
             keyDownHandler: {},
-            keyUpHandler: {
-                expectationUp.fulfill()
-            }
+            keyUpHandler: { expectationUp.fulfill() }
         )
 
-        monitor.processTransition(isKeyDownEvent: true)
-        monitor.processTransition(isKeyDownEvent: false)
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: false))
 
         wait(for: [expectationUp], timeout: 1.0)
     }
 
-    func testKeyUpHandlerNotCalledWhenNeverPressed() {
+    func testKeyUpNotCalledWithoutPriorActivation() {
         let monitor = makeMonitor(
             configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
             keyDownHandler: {},
-            keyUpHandler: {
-                XCTFail("Key up should not fire without prior key down")
-            }
+            keyUpHandler: { XCTFail("Key up should not fire without prior activation") }
         )
 
-        monitor.processTransition(isKeyDownEvent: false)
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: false))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
     }
 
-    // MARK: - stop()
-
-    func testStopRemovesRegisteredMonitors() {
+    func testPressReleasePressInvokesHandlerTwice() {
+        var keyDownCount = 0
         let monitor = makeMonitor(
-            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold)
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            keyDownHandler: { keyDownCount += 1 }
         )
 
-        monitor.start()
-        monitor.stop()
+        // First cycle
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: false))
 
-        XCTAssertEqual(removedEvents.count, 1)
+        // Second cycle
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+        drainMainQueue()
+
+        XCTAssertEqual(keyDownCount, 2)
+    }
+
+    // MARK: - Combination Detection
+
+    func testOtherKeyPressedCancelsActivation() {
+        var keyDownCount = 0
+        let monitor = makeMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            keyDownHandler: { keyDownCount += 1 }
+        )
+
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.processSemanticEvent(.otherKeyPressed)  // combination detected
+        monitor.activateKeyIfEligible()  // should not activate
+        drainMainQueue()
+
+        XCTAssertEqual(keyDownCount, 0)
+    }
+
+    func testOtherKeyPressedIgnoredWhenAlreadyActive() {
+        var keyUpCount = 0
+        let monitor = makeMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            keyDownHandler: {},
+            keyUpHandler: { keyUpCount += 1 }
+        )
+
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+        monitor.processSemanticEvent(.otherKeyPressed)  // ignored since already active
+        drainMainQueue()
+
+        XCTAssertEqual(keyUpCount, 0)
+    }
+
+    func testHandleKeyDownTriggersCombination() {
+        var keyDownCount = 0
+        let monitor = makeMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            keyDownHandler: { keyDownCount += 1 }
+        )
+
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.handleKeyDown(keyCode: 0)  // 'A' key pressed while modifier down
+        monitor.activateKeyIfEligible()
+        drainMainQueue()
+
+        XCTAssertEqual(keyDownCount, 0)
+    }
+
+    // MARK: - Tap Disabled Recovery
+
+    func testTapDisabledEndsCapture() {
+        let expectationUp = expectation(description: "keyUp")
+        let monitor = makeMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            keyDownHandler: {},
+            keyUpHandler: { expectationUp.fulfill() }
+        )
+
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+        monitor.processSemanticEvent(.tapDisabled)
+
+        wait(for: [expectationUp], timeout: 1.0)
+    }
+
+    func testTapDisabledReportsUnavailable() {
+        var receivedReadiness: PressAndHoldHotkeyReadiness?
+        let monitor = makeMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            readinessHandler: { readiness, _ in receivedReadiness = readiness }
+        )
+
+        monitor.processSemanticEvent(.tapDisabled)
+
+        XCTAssertEqual(receivedReadiness, .unavailable)
+    }
+
+    // MARK: - Readiness
+
+    func testReadinessHandlerCalledOnFirstActivation() {
+        var receivedReadiness: PressAndHoldHotkeyReadiness?
+        let monitor = makeMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            readinessHandler: { readiness, _ in receivedReadiness = readiness }
+        )
+
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+
+        XCTAssertEqual(receivedReadiness, .ready)
+    }
+
+    func testReadinessOnlyFiredOnceForMultipleActivations() {
+        var readyCount = 0
+        let monitor = makeMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            readinessHandler: { readiness, _ in
+                if readiness == .ready { readyCount += 1 }
+            }
+        )
+
+        // First cycle
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: false))
+
+        // Second cycle
+        monitor.processSemanticEvent(.modifierKeyChanged(isPressed: true))
+        monitor.activateKeyIfEligible()
+
+        XCTAssertEqual(readyCount, 1)
+    }
+
+    // MARK: - PressAndHoldConfiguration
+
+    func testNonGlobeKeyRequiresInputMonitoring() {
+        let config = PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold)
+        XCTAssertTrue(config.requiresInputMonitoringPermission(warningAcknowledged: false))
+    }
+
+    func testGlobeKeyRequiresWarningAcknowledgement() {
+        let config = PressAndHoldConfiguration(enabled: true, key: .globe, mode: .hold)
+        XCTAssertFalse(config.requiresInputMonitoringPermission(warningAcknowledged: false))
+        XCTAssertTrue(config.requiresInputMonitoringPermission(warningAcknowledged: true))
+    }
+
+    func testAccessibilityPermissionNotRequiredForHotkey() {
+        let config = PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold)
+        XCTAssertFalse(config.requiresAccessibilityPermission)
+    }
+
+    func testDisabledConfigurationRequiresNoPermissions() {
+        let config = PressAndHoldConfiguration(enabled: false, key: .rightCommand, mode: .hold)
+        XCTAssertFalse(config.requiresInputMonitoringPermission(warningAcknowledged: true))
+        XCTAssertFalse(config.requiresAccessibilityPermission)
+    }
+
+    // MARK: - PressAndHoldHotkeyPreferenceStore
+
+    func testPreferenceStoreReadWriteCycle() {
+        let defaults = makeDefaults()
+        PressAndHoldHotkeyPreferenceStore.setReadiness(.ready, message: "OK", using: defaults)
+
+        XCTAssertEqual(PressAndHoldHotkeyPreferenceStore.readiness(using: defaults), .ready)
+        XCTAssertEqual(PressAndHoldHotkeyPreferenceStore.failureMessage(using: defaults), "OK")
+    }
+
+    func testSyncSetsAwaitingVerificationWhenPermissionGranted() {
+        let defaults = makeDefaults()
+        let config = PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold)
+
+        PressAndHoldHotkeyPreferenceStore.syncForConfiguration(
+            config, inputMonitoringGranted: true, using: defaults
+        )
+
+        XCTAssertEqual(
+            PressAndHoldHotkeyPreferenceStore.readiness(using: defaults), .awaitingVerification)
+    }
+
+    func testSyncSetsRequiresInputMonitoringWhenNotGranted() {
+        let defaults = makeDefaults()
+        let config = PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold)
+
+        PressAndHoldHotkeyPreferenceStore.syncForConfiguration(
+            config, inputMonitoringGranted: false, using: defaults
+        )
+
+        XCTAssertEqual(
+            PressAndHoldHotkeyPreferenceStore.readiness(using: defaults), .requiresInputMonitoring)
+    }
+
+    func testSyncPreservesReadyState() {
+        let defaults = makeDefaults()
+        let config = PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold)
+        PressAndHoldHotkeyPreferenceStore.setReadiness(.ready, using: defaults)
+
+        PressAndHoldHotkeyPreferenceStore.syncForConfiguration(
+            config, inputMonitoringGranted: true, using: defaults
+        )
+
+        XCTAssertEqual(PressAndHoldHotkeyPreferenceStore.readiness(using: defaults), .ready)
+    }
+
+    func testSyncIgnoresGlobeConfiguration() {
+        let defaults = makeDefaults()
+        let config = PressAndHoldConfiguration(enabled: true, key: .globe, mode: .hold)
+
+        PressAndHoldHotkeyPreferenceStore.syncForConfiguration(
+            config, inputMonitoringGranted: true, using: defaults
+        )
+
+        // Should not have set anything — returns default
+        XCTAssertEqual(
+            PressAndHoldHotkeyPreferenceStore.readiness(using: defaults), .requiresInputMonitoring)
     }
 }

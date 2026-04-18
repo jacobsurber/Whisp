@@ -22,7 +22,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-VERSION=$(cat VERSION | tr -d '[:space:]')
+DEFAULT_VERSION=$(cat VERSION | tr -d '[:space:]')
+VERSION="${WHISP_VERSION:-$DEFAULT_VERSION}"
 APP_NAME="Whisp"
 UNINSTALLER_APP_NAME="Uninstall Whisp"
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"

@@ -118,6 +118,12 @@ export WHISP_APPLE_PASSWORD='app-specific-password'
 export WHISP_TEAM_ID='your-team-id'
 ```
 
+### GitHub Actions Release
+
+The GitHub Actions `Release` workflow is manual. Run it from `master`, choose a `patch`, `minor`, or `major` bump, or provide an explicit `x.y.z` version.
+
+Before building and publishing the notarized DMG, the workflow commits the updated `VERSION` file back to `master` so the released version exists in source.
+
 ### After Installing a New Build
 
 If Whisp is installed with a stable signature, macOS should preserve its existing Microphone, Accessibility, and Input Monitoring permissions across reinstalls.

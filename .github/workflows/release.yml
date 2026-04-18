@@ -1,12 +1,21 @@
 name: Release
 
 on:
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - "*.md"
-      - "LICENSE"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump to apply when version is not provided
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: Optional explicit version in x.y.z format
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -25,6 +34,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Require master branch
+        run: |
+          if [ "$GITHUB_REF_NAME" != "master" ]; then
+            echo "❌ Run this workflow from master so the VERSION bump lands on the release branch."
+            exit 1
+          fi
+
       - name: Import Developer ID certificate
         if: env.DEVELOPER_ID_CERT_BASE64 != ''
         env:
@@ -36,7 +52,7 @@ jobs:
           KEYCHAIN_PASSWORD="$(uuidgen)"
 
           # Decode certificate
-          echo "$DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH"
+          echo "$DEVELOPER_ID_CERT_BASE64" | base64 -D > "$CERT_PATH"
 
           # Create and configure temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
@@ -69,39 +85,121 @@ jobs:
         id: release_version
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          BUMP_TYPE: ${{ github.event.inputs.bump }}
         run: |
+          version_gt() {
+            local left="$1"
+            local right="$2"
+            local left_major left_minor left_patch right_major right_minor right_patch
+
+            IFS='.' read -r left_major left_minor left_patch <<< "$left"
+            IFS='.' read -r right_major right_minor right_patch <<< "$right"
+
+            for pair in \
+              "${left_major:-0} ${right_major:-0}" \
+              "${left_minor:-0} ${right_minor:-0}" \
+              "${left_patch:-0} ${right_patch:-0}"; do
+              set -- $pair
+              if ((10#$1 > 10#$2)); then
+                return 0
+              fi
+              if ((10#$1 < 10#$2)); then
+                return 1
+              fi
+            done
+
+            return 1
+          }
+
+          version_lt() {
+            version_gt "$2" "$1"
+          }
+
           FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
-          TAG="v$FILE_VERSION"
+          LATEST_TAG="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)"
+          BASE_VERSION="$FILE_VERSION"
           CURRENT_COMMIT="$(git rev-parse HEAD)"
+          SEMVER_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$'
+          LATEST_TAG_VERSION=""
+
+          if [ -n "$LATEST_TAG" ]; then
+            LATEST_TAG_VERSION="${LATEST_TAG#v}"
+            if ! [[ "$LATEST_TAG_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "❌ Latest release tag $LATEST_TAG is not a supported semantic version"
+              exit 1
+            fi
+            if version_gt "$LATEST_TAG_VERSION" "$BASE_VERSION"; then
+              BASE_VERSION="$LATEST_TAG_VERSION"
+            fi
+          fi
+
+          if [ -n "$INPUT_VERSION" ]; then
+            if ! [[ "$INPUT_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "❌ version input must use x.y.z format"
+              exit 1
+            fi
+            if version_lt "$INPUT_VERSION" "$BASE_VERSION"; then
+              echo "❌ version input $INPUT_VERSION is older than current source/release version $BASE_VERSION"
+              exit 1
+            fi
+            VERSION="$INPUT_VERSION"
+          elif [ -n "$LATEST_TAG_VERSION" ] && version_gt "$FILE_VERSION" "$LATEST_TAG_VERSION"; then
+            VERSION="$FILE_VERSION"
+            echo "ℹ️ VERSION already leads the latest tag. Reusing pending source version $VERSION."
+          else
+            if ! [[ "$BASE_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "❌ Cannot derive a semantic version from VERSION=$FILE_VERSION and latest tag=${LATEST_TAG:-none}"
+              exit 1
+            fi
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+            case "$BUMP_TYPE" in
+              major)
+                VERSION="$((MAJOR + 1)).0.0"
+                ;;
+              minor)
+                VERSION="$MAJOR.$((MINOR + 1)).0"
+                ;;
+              patch)
+                VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+                ;;
+              *)
+                echo "❌ Unsupported bump type: $BUMP_TYPE"
+                exit 1
+                ;;
+            esac
+          fi
+
+          TAG="v$VERSION"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "ℹ️ Release $TAG already exists. Skipping."
-            echo "version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "❌ Release $TAG already exists. Choose a newer version or different bump type."
+            exit 1
           fi
 
           if git tag -l "$TAG" | grep -q "$TAG"; then
             TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
+            if [ "$FILE_VERSION" != "$VERSION" ]; then
+              echo "❌ Tag $TAG already exists, but VERSION is still $FILE_VERSION. Update VERSION in source to resume that release."
+              exit 1
+            fi
             if [ "$TAG_COMMIT" != "$CURRENT_COMMIT" ]; then
-              echo "❌ Tag $TAG already exists at $TAG_COMMIT, but HEAD is $CURRENT_COMMIT. Bump VERSION in source before releasing."
+              echo "❌ Tag $TAG already exists at $TAG_COMMIT, but HEAD is $CURRENT_COMMIT."
               exit 1
             fi
             echo "ℹ️ Tag $TAG already exists without a GitHub release. Resuming release publish."
           fi
 
-          VERSION="$FILE_VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "should_release=true" >> "$GITHUB_OUTPUT"
-          echo "🚀 Will release $TAG"
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "source_version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "🚀 Prepared release $TAG"
 
       - name: Run tests
-        if: steps.release_version.outputs.should_release == 'true'
         run: swift test
 
       - name: Require Developer ID certificate
-        if: steps.release_version.outputs.should_release == 'true'
         run: |
           if [ -z "${SIGNING_IDENTITY:-}" ]; then
             echo "❌ Release workflow requires a Developer ID Application certificate"
@@ -111,26 +209,52 @@ jobs:
           echo "✅ Using Developer ID certificate: $SIGNING_IDENTITY"
 
       - name: Build notarized app bundles
-        if: steps.release_version.outputs.should_release == 'true'
-        run: CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" ./scripts/build.sh --notarize
+        run: WHISP_VERSION="${{ steps.release_version.outputs.version }}" CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" ./scripts/build.sh --notarize
 
       - name: Create notarized DMG
-        if: steps.release_version.outputs.should_release == 'true'
-        run: ./scripts/create-dmg.sh --notarize
+        run: WHISP_VERSION="${{ steps.release_version.outputs.version }}" ./scripts/create-dmg.sh --notarize
 
       - name: Create checksum
-        if: steps.release_version.outputs.should_release == 'true'
         run: shasum -a 256 "Whisp-${{ steps.release_version.outputs.version }}.dmg" >
           "Whisp-${{ steps.release_version.outputs.version }}.dmg.sha256"
 
+      - name: Commit release version
+        id: commit_release_version
+        run: |
+          TARGET_VERSION="${{ steps.release_version.outputs.version }}"
+          FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
+          CURRENT_COMMIT="$(git rev-parse HEAD)"
+          REMOTE_HEAD="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk '{print $1}')"
+
+          if [ -n "$REMOTE_HEAD" ] && [ "$REMOTE_HEAD" != "$CURRENT_COMMIT" ]; then
+            echo "❌ origin/$GITHUB_REF_NAME advanced during this run. Re-run the release workflow from the latest master commit."
+            exit 1
+          fi
+
+          if [ "$FILE_VERSION" != "$TARGET_VERSION" ]; then
+            printf '%s\n' "$TARGET_VERSION" > VERSION
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add VERSION
+            git commit -m "chore: bump VERSION to $TARGET_VERSION for release"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+
+            CURRENT_COMMIT="$(git rev-parse HEAD)"
+            echo "✅ Bumped VERSION to $TARGET_VERSION in commit $CURRENT_COMMIT"
+          else
+            echo "ℹ️ VERSION already set to $TARGET_VERSION"
+          fi
+
+          echo "commit_sha=$CURRENT_COMMIT" >> "$GITHUB_OUTPUT"
+
       - name: Create tag and GitHub Release
-        if: steps.release_version.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v$VERSION"
           if ! git tag -l "$TAG" | grep -q "$TAG"; then
-            git tag "$TAG"
+            git tag "$TAG" "${{ steps.commit_release_version.outputs.commit_sha }}"
           fi
           if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             git push origin "$TAG"
@@ -161,5 +285,6 @@ jobs:
             "Whisp-${{ steps.release_version.outputs.version }}.dmg" \
             "Whisp-${{ steps.release_version.outputs.version }}.dmg.sha256" \
             --verify-tag \
+            --target "${{ steps.commit_release_version.outputs.commit_sha }}" \
             --title "Whisp ${{ steps.release_version.outputs.version }}" \
             --notes-file /tmp/release-notes.md

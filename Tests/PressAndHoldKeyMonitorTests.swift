@@ -179,6 +179,86 @@ final class PressAndHoldKeyMonitorTests: XCTestCase {
         XCTAssertEqual(keyDownCount, 1)
     }
 
+    func testDuplicateFlagsChangedWhileRightCommandHeldDoesNotTriggerEarlyKeyUp() {
+        let keyDownExpectation = expectation(description: "keyDown")
+        let keyUpExpectation = expectation(description: "keyUp")
+        keyUpExpectation.isInverted = true
+
+        let rightCommandFlags = CGEventFlags([
+            .maskCommand,
+            CGEventFlags(rawValue: 0x0000_0010),
+        ])
+
+        let monitor = PressAndHoldKeyMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            keyDownHandler: {
+                keyDownExpectation.fulfill()
+            },
+            keyUpHandler: {
+                keyUpExpectation.fulfill()
+            }
+        )
+
+        monitor.handleFlagsChanged(
+            keyCode: Int64(PressAndHoldKey.rightCommand.keyCode),
+            flags: rightCommandFlags
+        )
+        wait(for: [keyDownExpectation], timeout: 1.0)
+
+        monitor.handleFlagsChanged(
+            keyCode: Int64(PressAndHoldKey.rightCommand.keyCode),
+            flags: rightCommandFlags
+        )
+
+        wait(for: [keyUpExpectation], timeout: 0.2)
+    }
+
+    func testRightCommandReleaseStillStopsWhenLeftCommandRemainsHeld() {
+        let keyDownExpectation = expectation(description: "keyDown")
+        let keyUpExpectation = expectation(description: "keyUp")
+
+        let rightCommandFlags = CGEventFlags([
+            .maskCommand,
+            CGEventFlags(rawValue: 0x0000_0010),
+        ])
+        let leftAndRightCommandFlags = CGEventFlags([
+            .maskCommand,
+            CGEventFlags(rawValue: 0x0000_0010),
+            CGEventFlags(rawValue: 0x0000_0008),
+        ])
+        let leftCommandOnlyFlags = CGEventFlags([
+            .maskCommand,
+            CGEventFlags(rawValue: 0x0000_0008),
+        ])
+
+        let monitor = PressAndHoldKeyMonitor(
+            configuration: PressAndHoldConfiguration(enabled: true, key: .rightCommand, mode: .hold),
+            keyDownHandler: {
+                keyDownExpectation.fulfill()
+            },
+            keyUpHandler: {
+                keyUpExpectation.fulfill()
+            }
+        )
+
+        monitor.handleFlagsChanged(
+            keyCode: Int64(PressAndHoldKey.rightCommand.keyCode),
+            flags: rightCommandFlags
+        )
+        wait(for: [keyDownExpectation], timeout: 1.0)
+
+        monitor.handleFlagsChanged(
+            keyCode: Int64(PressAndHoldKey.leftCommand.keyCode),
+            flags: leftAndRightCommandFlags
+        )
+        monitor.handleFlagsChanged(
+            keyCode: Int64(PressAndHoldKey.rightCommand.keyCode),
+            flags: leftCommandOnlyFlags
+        )
+
+        wait(for: [keyUpExpectation], timeout: 1.0)
+    }
+
     func testDefaultLeftCommandActivationAllowsCombinationWindow() {
         var keyDownCount = 0
         let monitor = PressAndHoldKeyMonitor(

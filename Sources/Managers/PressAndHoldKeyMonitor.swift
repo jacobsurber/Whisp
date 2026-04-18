@@ -96,6 +96,49 @@ internal enum PressAndHoldKey: String, CaseIterable, Identifiable {
             return .maskSecondaryFn
         }
     }
+
+    private var deviceSpecificEventFlagMaskRawValue: UInt64 {
+        switch self {
+        case .rightCommand:
+            return 0x0000_0010
+        case .leftCommand:
+            return 0x0000_0008
+        case .rightOption:
+            return 0x0000_0040
+        case .leftOption:
+            return 0x0000_0020
+        case .rightControl:
+            return 0x0000_2000
+        case .leftControl:
+            return 0x0000_0001
+        case .globe:
+            return 0x0080_0000
+        }
+    }
+
+    private var deviceSpecificFamilyMaskRawValue: UInt64 {
+        switch self {
+        case .rightCommand, .leftCommand:
+            return 0x0000_0018
+        case .rightOption, .leftOption:
+            return 0x0000_0060
+        case .rightControl, .leftControl:
+            return 0x0000_2001
+        case .globe:
+            return 0x0080_0000
+        }
+    }
+
+    func isPressed(in flags: CGEventFlags) -> Bool {
+        let deviceSpecificFamilyFlags = CGEventFlags(rawValue: deviceSpecificFamilyMaskRawValue)
+        let deviceSpecificFlags = CGEventFlags(rawValue: deviceSpecificEventFlagMaskRawValue)
+
+        if !flags.intersection(deviceSpecificFamilyFlags).isEmpty {
+            return flags.contains(deviceSpecificFlags)
+        }
+
+        return flags.contains(cgEventFlagsMask)
+    }
 }
 
 internal struct PressAndHoldConfiguration: Equatable {
@@ -481,10 +524,10 @@ internal final class PressAndHoldKeyMonitor {
             return
         }
 
-        // Determine direction from the actual modifier flags rather than
-        // toggling internal state — if the event tap silently drops events the
-        // tracked state can get inverted and stay broken.
-        let isPressed = flags.contains(monitoredKey.cgEventFlagsMask)
+        // Read the actual device-specific key state from the event flags.
+        // Toggling tracked state here is brittle when macOS emits duplicate
+        // flagsChanged events for the same physical modifier.
+        let isPressed = monitoredKey.isPressed(in: flags)
         processSemanticEvent(.modifierKeyChanged(isPressed: isPressed))
     }
 

@@ -39,15 +39,20 @@ internal final class FloatingMicrophoneDockViewModel: ObservableObject {
     private var isHovering = false
     private var pendingRecordingPresentation: RecordingPresentation?
     private var activeRecordingPresentation: RecordingPresentation?
-    private var successResetTask: Task<Void, Never>?
+    private var statusResetTask: Task<Void, Never>?
     private let successResetDelay: Duration
+    private let errorResetDelay: Duration
 
-    init(successResetDelay: Duration = .seconds(1.2)) {
+    init(
+        successResetDelay: Duration = .seconds(1.2),
+        errorResetDelay: Duration = .seconds(3)
+    ) {
         self.successResetDelay = successResetDelay
+        self.errorResetDelay = errorResetDelay
     }
 
     deinit {
-        successResetTask?.cancel()
+        statusResetTask?.cancel()
     }
 
     var isPrimaryActionEnabled: Bool {
@@ -74,7 +79,7 @@ internal final class FloatingMicrophoneDockViewModel: ObservableObject {
             }
 
             isProcessing = false
-            cancelSuccessReset()
+            cancelStatusReset()
         } else if wasRecording {
             activeRecordingPresentation = nil
             pendingRecordingPresentation = nil
@@ -88,7 +93,7 @@ internal final class FloatingMicrophoneDockViewModel: ObservableObject {
         isProcessing = true
         pendingRecordingPresentation = nil
         activeRecordingPresentation = nil
-        cancelSuccessReset()
+        cancelStatusReset()
         refreshStatus()
         refreshVisualStyle()
     }
@@ -104,7 +109,21 @@ internal final class FloatingMicrophoneDockViewModel: ObservableObject {
 
         status = .success
         refreshVisualStyle()
-        scheduleSuccessReset()
+        scheduleStatusReset(after: successResetDelay)
+    }
+
+    func handleTranscriptionFailed(message: String) {
+        isProcessing = false
+
+        guard hasPermission else {
+            refreshStatus()
+            refreshVisualStyle()
+            return
+        }
+
+        status = .error(message)
+        refreshVisualStyle()
+        scheduleStatusReset(after: errorResetDelay)
     }
 
     func setHovering(_ isHovering: Bool) {
@@ -143,18 +162,20 @@ internal final class FloatingMicrophoneDockViewModel: ObservableObject {
             status = .permissionRequired
         } else if case .success = status {
             return
+        } else if case .error = status {
+            return
         } else {
             status = .ready
         }
     }
 
-    private func scheduleSuccessReset() {
-        cancelSuccessReset()
+    private func scheduleStatusReset(after delay: Duration) {
+        cancelStatusReset()
 
-        successResetTask = Task { @MainActor [weak self] in
+        statusResetTask = Task { @MainActor [weak self] in
             guard let self else { return }
 
-            try? await Task.sleep(for: self.successResetDelay)
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
 
             if self.isRecording {
@@ -171,9 +192,9 @@ internal final class FloatingMicrophoneDockViewModel: ObservableObject {
         }
     }
 
-    private func cancelSuccessReset() {
-        successResetTask?.cancel()
-        successResetTask = nil
+    private func cancelStatusReset() {
+        statusResetTask?.cancel()
+        statusResetTask = nil
     }
 
     private func refreshVisualStyle() {

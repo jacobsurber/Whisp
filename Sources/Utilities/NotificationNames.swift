@@ -10,4 +10,5 @@ internal extension Notification.Name {
     static let recordingStopped = Notification.Name("RecordingStopped")
     static let transcriptionStarted = Notification.Name("TranscriptionStarted")
     static let transcriptionCompleted = Notification.Name("TranscriptionCompleted")
+    static let transcriptionFailed = Notification.Name("TranscriptionFailed")
 }

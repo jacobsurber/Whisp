@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 
 internal struct DashboardRecordingView: View {
-    @AppStorage("selectedMicrophone") private var selectedMicrophone = ""
+    @AppStorage(AppDefaults.Keys.selectedMicrophone) private var selectedMicrophone = ""
     @AppStorage(AppDefaults.Keys.pressAndHoldEnabled) private var pressAndHoldEnabled =
         PressAndHoldConfiguration.defaults
         .enabled
@@ -46,6 +46,12 @@ internal struct DashboardRecordingView: View {
                         }
                     }
                     .pickerStyle(.menu)
+
+                    Text(
+                        "Whisp currently records from macOS's active default input device. This menu stores a device reference for troubleshooting only."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Microphone")

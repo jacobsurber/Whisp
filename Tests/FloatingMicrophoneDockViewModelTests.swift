@@ -70,4 +70,22 @@ final class FloatingMicrophoneDockViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.status, .ready)
     }
+
+    func testFailureShowsErrorThenReturnsToReady() async {
+        let viewModel = FloatingMicrophoneDockViewModel(
+            successResetDelay: .milliseconds(10),
+            errorResetDelay: .milliseconds(10)
+        )
+
+        viewModel.applyRecorderState(isRecording: false, audioLevel: 0, hasPermission: true)
+        viewModel.handleTranscriptionStarted()
+        viewModel.handleTranscriptionFailed(message: "No speech detected in the recording.")
+
+        XCTAssertEqual(viewModel.status, .error("No speech detected in the recording."))
+        XCTAssertEqual(viewModel.visualStyle, .expandedIdle)
+
+        try? await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertEqual(viewModel.status, .ready)
+    }
 }

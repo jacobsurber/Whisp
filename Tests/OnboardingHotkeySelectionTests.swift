@@ -2,6 +2,46 @@ import XCTest
 @testable import Whisp
 
 final class OnboardingHotkeySelectionTests: XCTestCase {
+    func testHotkeyActivationStateRequiresRestartAfterPermissionRequest() {
+        let state = OnboardingHotkeyActivationCoordinator.resolveState(
+            for: PressAndHoldConfiguration(enabled: true, key: .rightOption, mode: .hold),
+            requestedInputMonitoringPermissionInSession: true,
+            isHotkeyReadyForUse: false
+        )
+
+        XCTAssertEqual(state, .restartRequired)
+    }
+
+    func testHotkeyActivationStateStaysLiveWhenPermissionWasNotRequestedInSession() {
+        let state = OnboardingHotkeyActivationCoordinator.resolveState(
+            for: PressAndHoldConfiguration(enabled: true, key: .rightOption, mode: .hold),
+            requestedInputMonitoringPermissionInSession: false,
+            isHotkeyReadyForUse: false
+        )
+
+        XCTAssertEqual(state, .liveVerification)
+    }
+
+    func testHotkeyActivationStateStaysLiveWhenPressAndHoldIsDisabled() {
+        let state = OnboardingHotkeyActivationCoordinator.resolveState(
+            for: PressAndHoldConfiguration(enabled: false, key: .rightOption, mode: .hold),
+            requestedInputMonitoringPermissionInSession: true,
+            isHotkeyReadyForUse: false
+        )
+
+        XCTAssertEqual(state, .liveVerification)
+    }
+
+    func testHotkeyActivationStateStaysLiveWhenHotkeyIsAlreadyReady() {
+        let state = OnboardingHotkeyActivationCoordinator.resolveState(
+            for: PressAndHoldConfiguration(enabled: true, key: .rightOption, mode: .hold),
+            requestedInputMonitoringPermissionInSession: true,
+            isHotkeyReadyForUse: true
+        )
+
+        XCTAssertEqual(state, .liveVerification)
+    }
+
     func testGlobeSelectionRequiresConfirmationWhenWarningNotAcknowledged() {
         let decision = OnboardingPressAndHoldKeySelectionResolver.resolveChange(
             from: PressAndHoldKey.rightOption.rawValue,

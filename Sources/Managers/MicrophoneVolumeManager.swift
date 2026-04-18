@@ -1,67 +1,75 @@
-import Foundation
 import AVFoundation
-import CoreAudio
 import AudioToolbox
-import os.log
+import CoreAudio
+import Foundation
 import Observation
+import os.log
 
 @Observable
 internal class MicrophoneVolumeManager {
+    internal struct InputDeviceInfo: Sendable, Equatable {
+        let deviceID: AudioDeviceID
+        let uid: String?
+        let name: String?
+    }
+
     static let shared = MicrophoneVolumeManager()
-    
+
     private var originalVolume: Float32?
     private var audioDeviceID: AudioDeviceID?
     private var isVolumeBoosted = false
-    
+
     private init() {}
-    
+
     // MARK: - Public Interface
-    
+
     /// Temporarily boost microphone volume to maximum (100%)
     func boostMicrophoneVolume() async -> Bool {
         guard !isVolumeBoosted else { return true }
-        
+
         do {
             let deviceID = try await getDefaultInputDevice()
             let currentVolume = try await getInputVolume(deviceID: deviceID)
-            
+
             // Store original volume and device for restoration
             originalVolume = currentVolume
             audioDeviceID = deviceID
-            
+
             // Set volume to maximum
             let success = try await setInputVolume(deviceID: deviceID, volume: 1.0)
             if success {
                 isVolumeBoosted = true
             }
-            
+
             return success
         } catch {
             Logger.microphoneVolume.error("Failed to boost microphone volume: \(error.localizedDescription)")
             return false
         }
     }
-    
+
     /// Restore microphone volume to its original level
     func restoreMicrophoneVolume() async {
         guard isVolumeBoosted,
-              let originalVolume = originalVolume,
-              let deviceID = audioDeviceID else {
+            let originalVolume = originalVolume,
+            let deviceID = audioDeviceID
+        else {
             return
         }
-        
+
         do {
             _ = try await setInputVolume(deviceID: deviceID, volume: originalVolume)
         } catch {
-            Logger.microphoneVolume.error("Failed to restore microphone volume: \(error.localizedDescription)")
+            Logger.microphoneVolume.error(
+                "Failed to restore microphone volume: \(error.localizedDescription)")
         }
-        
+
         // Clean up state regardless of success
         self.originalVolume = nil
         self.audioDeviceID = nil
         isVolumeBoosted = false
     }
-    
+
     /// Check if microphone volume control is available
     func isVolumeControlAvailable() async -> Bool {
         do {
@@ -71,20 +79,45 @@ internal class MicrophoneVolumeManager {
             return false
         }
     }
-    
+
+    func currentDefaultInputDeviceInfoOrNil() async -> InputDeviceInfo? {
+        do {
+            return try await currentDefaultInputDeviceInfo()
+        } catch {
+            Logger.microphoneVolume.error(
+                "Failed to inspect default input device: \(error.localizedDescription)"
+            )
+            return nil
+        }
+    }
+
+    func currentDefaultInputDeviceInfo() async throws -> InputDeviceInfo {
+        let deviceID = try await getDefaultInputDevice()
+        let name = await getStringProperty(
+            deviceID: deviceID,
+            selector: kAudioObjectPropertyName
+        )
+        let uid = await getStringProperty(
+            deviceID: deviceID,
+            selector: kAudioDevicePropertyDeviceUID
+        )
+
+        return InputDeviceInfo(deviceID: deviceID, uid: uid, name: name)
+    }
+
     // MARK: - Core Audio Implementation
-    
+
     private func getDefaultInputDevice() async throws -> AudioDeviceID {
         return try await withCheckedThrowingContinuation { continuation in
             var deviceID: AudioDeviceID = 0
             var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-            
+
             var address = AudioObjectPropertyAddress(
                 mSelector: kAudioHardwarePropertyDefaultInputDevice,
                 mScope: kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain
             )
-            
+
             let status = AudioObjectGetPropertyData(
                 AudioObjectID(kAudioObjectSystemObject),
                 &address,
@@ -93,7 +126,7 @@ internal class MicrophoneVolumeManager {
                 &size,
                 &deviceID
             )
-            
+
             if status == noErr {
                 continuation.resume(returning: deviceID)
             } else {
@@ -101,7 +134,43 @@ internal class MicrophoneVolumeManager {
             }
         }
     }
-    
+
+    private func getStringProperty(
+        deviceID: AudioDeviceID,
+        selector: AudioObjectPropertySelector
+    ) async -> String? {
+        await withCheckedContinuation { continuation in
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+
+            guard AudioObjectHasProperty(deviceID, &address) else {
+                continuation.resume(returning: nil)
+                return
+            }
+
+            var value: CFString = "" as CFString
+            var size = UInt32(MemoryLayout<CFString>.size)
+            let status = AudioObjectGetPropertyData(
+                deviceID,
+                &address,
+                0,
+                nil,
+                &size,
+                &value
+            )
+
+            guard status == noErr else {
+                continuation.resume(returning: nil)
+                return
+            }
+
+            continuation.resume(returning: value as String)
+        }
+    }
+
     private func hasVolumeControl(deviceID: AudioDeviceID) async throws -> Bool {
         return try await withCheckedThrowingContinuation { continuation in
             var address = AudioObjectPropertyAddress(
@@ -109,23 +178,23 @@ internal class MicrophoneVolumeManager {
                 mScope: kAudioDevicePropertyScopeInput,
                 mElement: kAudioObjectPropertyElementMain
             )
-            
+
             let hasProperty = AudioObjectHasProperty(deviceID, &address)
             continuation.resume(returning: hasProperty)
         }
     }
-    
+
     private func getInputVolume(deviceID: AudioDeviceID) async throws -> Float32 {
         return try await withCheckedThrowingContinuation { continuation in
             var volume: Float32 = 0.0
             var size = UInt32(MemoryLayout<Float32>.size)
-            
+
             var address = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyVolumeScalar,
                 mScope: kAudioDevicePropertyScopeInput,
                 mElement: kAudioObjectPropertyElementMain
             )
-            
+
             let status = AudioObjectGetPropertyData(
                 deviceID,
                 &address,
@@ -134,7 +203,7 @@ internal class MicrophoneVolumeManager {
                 &size,
                 &volume
             )
-            
+
             if status == noErr {
                 continuation.resume(returning: volume)
             } else {
@@ -142,18 +211,18 @@ internal class MicrophoneVolumeManager {
             }
         }
     }
-    
+
     private func setInputVolume(deviceID: AudioDeviceID, volume: Float32) async throws -> Bool {
         return try await withCheckedThrowingContinuation { continuation in
             var newVolume = volume
             let size = UInt32(MemoryLayout<Float32>.size)
-            
+
             var address = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyVolumeScalar,
                 mScope: kAudioDevicePropertyScopeInput,
                 mElement: kAudioObjectPropertyElementMain
             )
-            
+
             let status = AudioObjectSetPropertyData(
                 deviceID,
                 &address,
@@ -162,7 +231,7 @@ internal class MicrophoneVolumeManager {
                 size,
                 &newVolume
             )
-            
+
             if status == noErr {
                 continuation.resume(returning: true)
             } else if status == kAudioHardwareUnsupportedOperationError {
@@ -173,9 +242,9 @@ internal class MicrophoneVolumeManager {
             }
         }
     }
-    
+
     // MARK: - Alternative Implementation for USB/External Microphones
-    
+
     /// Alternative method using AVCaptureDevice for external microphones
     private func boostAVCaptureDeviceVolume() -> Bool {
         _ = AVCaptureDevice.DiscoverySession(
@@ -183,15 +252,15 @@ internal class MicrophoneVolumeManager {
             mediaType: .audio,
             position: .unspecified
         )
-        
+
         guard AVCaptureDevice.default(for: .audio) != nil else {
             return false
         }
-        
+
         // Note: AVCaptureDevice doesn't provide direct volume control
         // This would require using AVAudioSession on iOS, but on macOS
         // we need to use Core Audio as implemented above
-        
+
         return false
     }
 }
@@ -203,7 +272,7 @@ internal enum VolumeError: LocalizedError {
     case getVolumeFailed
     case setVolumeFailed
     case volumeControlNotSupported
-    
+
     var errorDescription: String? {
         switch self {
         case .deviceNotFound:
@@ -220,7 +289,7 @@ internal enum VolumeError: LocalizedError {
 
 // MARK: - Extension for UserDefaults Key
 
-internal extension UserDefaults {
+extension UserDefaults {
     var autoBoostMicrophoneVolume: Bool {
         get { bool(forKey: "autoBoostMicrophoneVolume") }
         set { set(newValue, forKey: "autoBoostMicrophoneVolume") }

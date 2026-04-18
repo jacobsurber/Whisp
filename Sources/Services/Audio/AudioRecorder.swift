@@ -22,6 +22,8 @@ internal class AudioRecorder: NSObject, ObservableObject {
     private let dateProvider: () -> Date
     private let authorizationStatusProvider: () -> AVAuthorizationStatus
     private let permissionRequester: (@escaping @Sendable (Bool) -> Void) -> Void
+    private let defaultInputDeviceProvider: @Sendable () async -> MicrophoneVolumeManager.InputDeviceInfo?
+    private let diagnosticsLogger: @Sendable (String) -> Void
     private var stopRecordingContinuation: CheckedContinuation<StopRecordingResult, Never>?
     private var stopRecordingTask: Task<URL?, Never>?
     private var stoppingRecorderIdentifier: ObjectIdentifier?
@@ -46,6 +48,12 @@ internal class AudioRecorder: NSObject, ObservableObject {
 
             AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
         }
+        self.defaultInputDeviceProvider = {
+            await MicrophoneVolumeManager.shared.currentDefaultInputDeviceInfoOrNil()
+        }
+        self.diagnosticsLogger = { message in
+            Logger.audioRecorder.info("\(message, privacy: .public)")
+        }
         super.init()
         setupRecorder()
         checkMicrophonePermission()
@@ -65,6 +73,13 @@ internal class AudioRecorder: NSObject, ObservableObject {
             }
 
             AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
+        },
+        defaultInputDeviceProvider: @escaping @Sendable () async -> MicrophoneVolumeManager.InputDeviceInfo? =
+            {
+                await MicrophoneVolumeManager.shared.currentDefaultInputDeviceInfoOrNil()
+            },
+        diagnosticsLogger: @escaping @Sendable (String) -> Void = { message in
+            Logger.audioRecorder.info("\(message, privacy: .public)")
         }
     ) {
         self.volumeManager = volumeManager
@@ -72,6 +87,8 @@ internal class AudioRecorder: NSObject, ObservableObject {
         self.dateProvider = dateProvider
         self.authorizationStatusProvider = authorizationStatusProvider
         self.permissionRequester = permissionRequester
+        self.defaultInputDeviceProvider = defaultInputDeviceProvider
+        self.diagnosticsLogger = diagnosticsLogger
         super.init()
         setupRecorder()
         checkMicrophonePermission()
@@ -120,6 +137,8 @@ internal class AudioRecorder: NSObject, ObservableObject {
         guard audioRecorder == nil else {
             return false
         }
+
+        await logRecordingInputDiagnostics()
 
         // Boost microphone volume if enabled (await to ensure it completes before recording)
         if UserDefaults.standard.autoBoostMicrophoneVolume {
@@ -179,6 +198,44 @@ internal class AudioRecorder: NSObject, ObservableObject {
             checkMicrophonePermission()
             return false
         }
+    }
+
+    private func logRecordingInputDiagnostics() async {
+        let selectedMicrophoneID =
+            UserDefaults.standard.string(forKey: AppDefaults.Keys.selectedMicrophone)
+            ?? ""
+        let selectedMicrophoneDescription = Self.selectedMicrophoneDescription(for: selectedMicrophoneID)
+
+        if let defaultInputDevice = await defaultInputDeviceProvider() {
+            let name = defaultInputDevice.name ?? "Unknown"
+            let uid = defaultInputDevice.uid ?? "Unknown"
+            diagnosticsLogger(
+                "Recording start input diagnostics: system default input name=\(name), id=\(defaultInputDevice.deviceID), uid=\(uid), dashboard selection=\(selectedMicrophoneDescription). Whisp currently records from the system default input."
+            )
+            return
+        }
+
+        diagnosticsLogger(
+            "Recording start input diagnostics: system default input unavailable, dashboard selection=\(selectedMicrophoneDescription). Whisp currently records from the system default input."
+        )
+    }
+
+    private static func selectedMicrophoneDescription(for uniqueID: String) -> String {
+        guard !uniqueID.isEmpty else {
+            return "System Default"
+        }
+
+        let devices = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices
+
+        if let device = devices.first(where: { $0.uniqueID == uniqueID }) {
+            return "\(device.localizedName) [\(uniqueID)]"
+        }
+
+        return "Stored selection [\(uniqueID)]"
     }
 
     private func ensureMicrophonePermission() async -> Bool {

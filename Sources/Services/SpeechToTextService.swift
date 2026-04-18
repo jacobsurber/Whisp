@@ -9,6 +9,7 @@ internal enum SpeechToTextError: Error, LocalizedError {
     case transcriptionFailed(String)
     case localTranscriptionFailed(Error)
     case fileTooLarge
+    case noSpeechDetected
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +26,8 @@ internal enum SpeechToTextError: Error, LocalizedError {
                 .replacingOccurrences(of: "%@", with: error.localizedDescription)
         case .fileTooLarge:
             return LocalizedStrings.Errors.fileTooLarge
+        case .noSpeechDetected:
+            return "No speech detected in the recording."
         }
     }
 }
@@ -101,6 +104,8 @@ internal class SpeechToTextService {
         let validationResult = await AudioValidator.validateAudioFile(at: audioURL)
         switch validationResult {
         case .valid(_): break
+        case .invalid(.silentAudio):
+            throw SpeechToTextError.noSpeechDetected
         case .invalid(let error):
             throw SpeechToTextError.transcriptionFailed(error.localizedDescription)
         }
@@ -424,7 +429,11 @@ internal class SpeechToTextService {
         do {
             let text = try await localWhisperService.transcribe(audioFileURL: audioURL, model: model) { _ in
             }
-            return Self.cleanTranscriptionText(text)
+            let cleaned = Self.cleanTranscriptionText(text)
+            guard !cleaned.isEmpty else { throw SpeechToTextError.noSpeechDetected }
+            return cleaned
+        } catch let e as SpeechToTextError {
+            throw e
         } catch {
             throw SpeechToTextError.localTranscriptionFailed(error)
         }
@@ -451,17 +460,22 @@ internal class SpeechToTextService {
                 async let transcription = parakeetService.transcribe(
                     audioFileURL: audioURL, pythonPath: pythonPath)
                 let (text, _) = try await (transcription, warmupTask)
-                return Self.cleanTranscriptionText(text)
+                let cleaned = Self.cleanTranscriptionText(text)
+                guard !cleaned.isEmpty else { throw SpeechToTextError.noSpeechDetected }
+                return cleaned
             } else {
                 let text = try await parakeetService.transcribe(
                     audioFileURL: audioURL, pythonPath: pythonPath)
-                return Self.cleanTranscriptionText(text)
+                let cleaned = Self.cleanTranscriptionText(text)
+                guard !cleaned.isEmpty else { throw SpeechToTextError.noSpeechDetected }
+                return cleaned
             }
         } catch {
-            // Pass through model-not-ready distinctly so UI can redirect to Settings
+            // Pass through model-not-ready and no-speech distinctly
             if let pe = error as? ParakeetError, pe == .modelNotReady {
                 throw pe
             }
+            if error is SpeechToTextError { throw error }
             throw SpeechToTextError.transcriptionFailed("Parakeet error: \(error.localizedDescription)")
         }
     }
@@ -474,11 +488,14 @@ internal class SpeechToTextService {
         _ = try UvBootstrap.ensureVenv(userPython: nil)
         do {
             let text = try await gemmaService.transcribe(audioFileURL: audioURL)
-            return Self.cleanTranscriptionText(text)
+            let cleaned = Self.cleanTranscriptionText(text)
+            guard !cleaned.isEmpty else { throw SpeechToTextError.noSpeechDetected }
+            return cleaned
         } catch {
             if let ge = error as? GemmaError, ge == .modelNotReady {
                 throw ge
             }
+            if error is SpeechToTextError { throw error }
             throw SpeechToTextError.transcriptionFailed("Gemma error: \(error.localizedDescription)")
         }
     }
@@ -490,11 +507,14 @@ internal class SpeechToTextService {
         _ = try UvBootstrap.ensureVenv(userPython: nil)
         do {
             let text = try await whisperMLXService.transcribe(audioFileURL: audioURL)
-            return Self.cleanTranscriptionText(text)
+            let cleaned = Self.cleanTranscriptionText(text)
+            guard !cleaned.isEmpty else { throw SpeechToTextError.noSpeechDetected }
+            return cleaned
         } catch {
             if let we = error as? WhisperMLXError, we == .modelNotReady {
                 throw we
             }
+            if error is SpeechToTextError { throw error }
             throw SpeechToTextError.transcriptionFailed("Whisper MLX error: \(error.localizedDescription)")
         }
     }

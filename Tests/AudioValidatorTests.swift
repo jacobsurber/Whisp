@@ -53,6 +53,17 @@ final class AudioValidatorTests: XCTestCase {
         XCTAssertGreaterThan(info.duration, 0)
         XCTAssertGreaterThan(info.fileSize, 0)
     }
+
+    func testValidateAudioFileRejectsSilentAudio() async throws {
+        let url = try makeSilentAudioFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let result = await AudioValidator.validateAudioFile(at: url)
+
+        guard case .invalid(.silentAudio) = result else {
+            return XCTFail("Expected silentAudio, got \(result)")
+        }
+    }
     
     func testValidateAudioFileDetectsCorruptedAudio() async throws {
         let url = try makeCorruptedAudioFile()
@@ -100,6 +111,31 @@ final class AudioValidatorTests: XCTestCase {
         }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("AudioValidatorTests-valid-\(UUID().uuidString).wav")
+
+        let frameCount: AVAudioFrameCount = 1_024
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            throw NSError(domain: "AudioValidatorTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to create buffer"])
+        }
+        buffer.frameLength = frameCount
+
+        if let channelData = buffer.floatChannelData {
+            let samples = channelData[0]
+            for index in 0..<Int(frameCount) {
+                samples[index] = sin(Float(index) * 0.1) * 0.25
+            }
+        }
+
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+        return url
+    }
+
+    private func makeSilentAudioFile() throws -> URL {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1) else {
+            throw NSError(domain: "AudioValidatorTests", code: 2, userInfo: [NSLocalizedDescriptionKey: "Unable to create audio format"])
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AudioValidatorTests-silent-\(UUID().uuidString).wav")
         
         let frameCount: AVAudioFrameCount = 1_024
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {

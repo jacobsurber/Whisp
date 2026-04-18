@@ -130,12 +130,27 @@ internal class AudioValidator {
                 return .invalid(.emptyAudio)
             }
             
-            // Try to read a small sample to detect corruption
-            let frameCapacity = min(4096, AVAudioFrameCount(audioFile.length))
+            // Read a sample to detect corruption AND check for silence (permission denied / muted mic)
+            let frameCapacity = min(16384, AVAudioFrameCount(audioFile.length))
             if let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: frameCapacity) {
                 try audioFile.read(into: buffer)
+
+                // Check RMS energy — truly silent audio (permission denied / muted) has RMS ≈ 0
+                if let channelData = buffer.floatChannelData {
+                    let frameCount = Int(buffer.frameLength)
+                    if frameCount > 0 {
+                        var sumSquares: Float = 0
+                        for i in 0..<frameCount {
+                            sumSquares += channelData[0][i] * channelData[0][i]
+                        }
+                        let rms = sqrt(sumSquares / Float(frameCount))
+                        if rms < 1e-5 {
+                            return .invalid(.silentAudio)
+                        }
+                    }
+                }
             }
-            
+
             return .valid(AudioFileInfo(
                 format: format,
                 duration: Double(audioFile.length) / format.sampleRate,
@@ -174,7 +189,8 @@ internal enum AudioValidationError: LocalizedError {
     case invalidSampleRate
     case invalidChannelCount
     case emptyAudio
-    
+    case silentAudio
+
     var errorDescription: String? {
         switch self {
         case .fileNotFound:
@@ -211,9 +227,13 @@ internal enum AudioValidationError: LocalizedError {
                 value: "Invalid audio channel count", 
                 comment: "Error when audio channel count is invalid")
         case .emptyAudio:
-            return NSLocalizedString("audio_validation.empty_audio", 
-                value: "Audio file contains no audio data", 
+            return NSLocalizedString("audio_validation.empty_audio",
+                value: "Audio file contains no audio data",
                 comment: "Error when audio file has no actual audio content")
+        case .silentAudio:
+            return NSLocalizedString("audio_validation.silent_audio",
+                value: "No audio signal detected — check microphone access in System Settings › Privacy & Security › Microphone.",
+                comment: "Error when audio is completely silent, likely permission denied")
         }
     }
 }

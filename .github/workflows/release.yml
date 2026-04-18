@@ -1,6 +1,8 @@
 name: Release
 
 on:
+  push:
+    branches: [ master ]
   workflow_dispatch:
     inputs:
       bump:
@@ -17,16 +19,24 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   build-and-release:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.actor !=
+      'github-actions[bot]' }}
     runs-on: macos-15
     env:
       WHISP_APPLE_ID: ${{ secrets.APPLE_ID }}
       WHISP_APPLE_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
       WHISP_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      DEVELOPER_ID_CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
+      DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -42,10 +52,7 @@ jobs:
           fi
 
       - name: Import Developer ID certificate
-        if: env.DEVELOPER_ID_CERT_BASE64 != ''
-        env:
-          DEVELOPER_ID_CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
-          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        if: ${{ env.DEVELOPER_ID_CERT_BASE64 != '' }}
         run: |
           CERT_PATH="$RUNNER_TEMP/dev-id-cert.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
@@ -85,8 +92,10 @@ jobs:
         id: release_version
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
-          BUMP_TYPE: ${{ github.event.inputs.bump }}
+          INPUT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version ||
+            '' }}
+          BUMP_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.bump ||
+            'patch' }}
         run: |
           version_gt() {
             local left="$1"
@@ -209,31 +218,43 @@ jobs:
           echo "✅ Using Developer ID certificate: $SIGNING_IDENTITY"
 
       - name: Build notarized app bundles
-        run: WHISP_VERSION="${{ steps.release_version.outputs.version }}"
-          CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" ./scripts/build.sh --notarize
+        run: |
+          WHISP_VERSION="${{ steps.release_version.outputs.version }}" \
+          CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+          ./scripts/build.sh --notarize
 
       - name: Create notarized DMG
-        run: WHISP_VERSION="${{ steps.release_version.outputs.version }}"
+        run: |
+          WHISP_VERSION="${{ steps.release_version.outputs.version }}" \
           ./scripts/create-dmg.sh --notarize
 
       - name: Create checksum
-        run: shasum -a 256 "Whisp-${{ steps.release_version.outputs.version }}.dmg" >
-          "Whisp-${{ steps.release_version.outputs.version }}.dmg.sha256"
+        run: |
+          shasum -a 256 "Whisp-${{ steps.release_version.outputs.version }}.dmg" \
+            > "Whisp-${{ steps.release_version.outputs.version }}.dmg.sha256"
 
       - name: Commit release version
         id: commit_release_version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           TARGET_VERSION="${{ steps.release_version.outputs.version }}"
           FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
           CURRENT_COMMIT="$(git rev-parse HEAD)"
           REMOTE_HEAD="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk '{print $1}')"
+          SHOULD_PUBLISH=true
 
           if [ -n "$REMOTE_HEAD" ] && [ "$REMOTE_HEAD" != "$CURRENT_COMMIT" ]; then
-            echo "❌ origin/$GITHUB_REF_NAME advanced during this run. Re-run the release workflow from the latest master commit."
-            exit 1
+            if [ "$EVENT_NAME" = "push" ]; then
+              echo "ℹ️ origin/$GITHUB_REF_NAME advanced during this run. Skipping publish because a newer push-triggered release run should ship the latest master commit."
+              SHOULD_PUBLISH=false
+            else
+              echo "❌ origin/$GITHUB_REF_NAME advanced during this run. Re-run the release workflow from the latest master commit."
+              exit 1
+            fi
           fi
 
-          if [ "$FILE_VERSION" != "$TARGET_VERSION" ]; then
+          if [ "$SHOULD_PUBLISH" = "true" ] && [ "$FILE_VERSION" != "$TARGET_VERSION" ]; then
             printf '%s\n' "$TARGET_VERSION" > VERSION
 
             git config user.name "github-actions[bot]"
@@ -244,13 +265,17 @@ jobs:
 
             CURRENT_COMMIT="$(git rev-parse HEAD)"
             echo "✅ Bumped VERSION to $TARGET_VERSION in commit $CURRENT_COMMIT"
-          else
+          elif [ "$SHOULD_PUBLISH" = "true" ]; then
             echo "ℹ️ VERSION already set to $TARGET_VERSION"
           fi
 
-          echo "commit_sha=$CURRENT_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+          if [ "$SHOULD_PUBLISH" = "true" ]; then
+            echo "commit_sha=$CURRENT_COMMIT" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create tag and GitHub Release
+        if: ${{ steps.commit_release_version.outputs.should_publish == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

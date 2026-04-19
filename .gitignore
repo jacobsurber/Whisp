@@ -118,8 +118,6 @@ Temporary Items
 # App specific
 Whisp.app/
 Whisp.zip
-VoiceFlow.app/
-VoiceFlow.zip
 *.dmg
 notarization.log
 *.xcodeproj/
@@ -129,7 +127,6 @@ __pycache__
 .env
 .env.local
 Whisp.iconset/
-VoiceFlow.iconset/
 .build-uv/
 .beads/
 

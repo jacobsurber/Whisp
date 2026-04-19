@@ -151,23 +151,26 @@ internal class MicrophoneVolumeManager {
                 return
             }
 
-            var value: CFString = "" as CFString
-            var size = UInt32(MemoryLayout<CFString>.size)
-            let status = AudioObjectGetPropertyData(
-                deviceID,
-                &address,
-                0,
-                nil,
-                &size,
-                &value
-            )
+            // These Core Audio string properties return caller-owned CFObjects.
+            var value: Unmanaged<CFString>?
+            var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            let status = withUnsafeMutablePointer(to: &value) { valuePointer in
+                AudioObjectGetPropertyData(
+                    deviceID,
+                    &address,
+                    0,
+                    nil,
+                    &size,
+                    valuePointer
+                )
+            }
 
-            guard status == noErr else {
+            guard status == noErr, let value else {
                 continuation.resume(returning: nil)
                 return
             }
 
-            continuation.resume(returning: value as String)
+            continuation.resume(returning: value.takeRetainedValue() as String)
         }
     }
 

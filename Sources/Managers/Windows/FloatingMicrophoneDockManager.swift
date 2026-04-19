@@ -136,16 +136,6 @@ internal final class FloatingMicrophoneDockManager: NSObject {
                     self?.viewModel.handleTranscriptionCompleted()
                 }
             },
-            center.addObserver(
-                forName: .transcriptionFailed,
-                object: nil,
-                queue: .main
-            ) { [weak self] notification in
-                Task { @MainActor [weak self] in
-                    let message = notification.object as? String ?? "Transcription failed"
-                    self?.viewModel.handleTranscriptionFailed(message: message)
-                }
-            },
         ]
     }
 

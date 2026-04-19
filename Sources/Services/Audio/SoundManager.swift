@@ -38,13 +38,6 @@ internal class SoundManager: ObservableObject {
         soundProvider.sound(named: "Glass")?.play()
     }
 
-    /// Plays a subtle sound when recording produces no speech (silent audio or no transcription)
-    func playNoSpeechSound() {
-        let playSound = UserDefaults.standard.object(forKey: "playCompletionSound") as? Bool ?? true
-        guard playSound else { return }
-        soundProvider.sound(named: "Basso")?.play()
-    }
-
     /// Plays a quick sound when recording starts in express mode
     func playRecordingStartSound() {
         // Check user preference before playing sound (reuse completion sound setting)

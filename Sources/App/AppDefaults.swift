@@ -11,7 +11,6 @@ internal enum AppDefaults {
         static let transcriptionProvider = "transcriptionProvider"
         static let selectedWhisperModel = "selectedWhisperModel"
         static let selectedParakeetModel = "selectedParakeetModel"
-        static let selectedMicrophone = "selectedMicrophone"
 
         static let semanticCorrectionMode = "semanticCorrectionMode"
         static let semanticCorrectionModelRepo = "semanticCorrectionModelRepo"
@@ -63,7 +62,6 @@ internal enum AppDefaults {
             Keys.transcriptionProvider: defaultTranscriptionProvider.rawValue,
             Keys.selectedWhisperModel: defaultWhisperModel.rawValue,
             Keys.selectedParakeetModel: defaultParakeetModel.rawValue,
-            Keys.selectedMicrophone: "",
 
             Keys.semanticCorrectionMode: defaultSemanticCorrectionMode.rawValue,
             Keys.semanticCorrectionModelRepo: defaultSemanticCorrectionModelRepo,

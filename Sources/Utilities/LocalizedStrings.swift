@@ -114,11 +114,6 @@ internal enum LocalizedStrings {
             value:
                 "Unable to upload your recording: %@\n\nPlease check your internet connection and try again.",
             comment: "Error when file upload fails")
-
-        static let noSpeechDetected = NSLocalizedString(
-            "errors.no_speech_detected",
-            value: "No speech detected in the recording.",
-            comment: "Error when audio contains no detectable speech")
     }
 
     // MARK: - Local Whisper Errors

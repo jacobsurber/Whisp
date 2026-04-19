@@ -236,10 +236,6 @@ extension AppDelegate {
         Task { @MainActor in
             guard let audioURL = await recorder.stopRecording() else {
                 Logger.app.error("Failed to get audio URL from recorder")
-                NotificationCenter.default.post(
-                    name: .transcriptionFailed,
-                    object: "Could not finish recording."
-                )
                 resetToIdleState()
                 return
             }
@@ -285,20 +281,11 @@ extension AppDelegate {
             } catch {
                 Logger.app.error("Transcription failed: \(error.localizedDescription)")
 
-                if let speechError = error as? SpeechToTextError,
-                    case .noSpeechDetected = speechError
-                {
-                    SoundManager().playNoSpeechSound()
-                }
-
                 // Reset menu bar to idle state even on error
                 resetToIdleState()
 
-                // Post the failure separately so the dock can show the error instead of a success state.
-                NotificationCenter.default.post(
-                    name: .transcriptionFailed,
-                    object: error.localizedDescription
-                )
+                // Post notification that transcription completed (with error)
+                NotificationCenter.default.post(name: .transcriptionCompleted, object: nil)
 
                 // Show error alert (user-visible)
                 DispatchQueue.main.async {

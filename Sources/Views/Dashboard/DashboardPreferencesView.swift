@@ -1,3 +1,4 @@
+import AVFoundation
 import ServiceManagement
 import SwiftUI
 import os.log
@@ -10,13 +11,30 @@ internal struct DashboardPreferencesView: View {
     @AppStorage(AppDefaults.Keys.enableSmartPaste) private var enableSmartPaste = true
     @AppStorage(AppDefaults.Keys.playCompletionSound) private var playCompletionSound = true
     @AppStorage(AppDefaults.Keys.maxModelStorageGB) private var maxModelStorageGB = 5.0
+    @AppStorage("selectedMicrophone") private var selectedMicrophone = ""
 
     @State private var loginItemError: String?
+    @State private var availableMicrophones: [AVCaptureDevice] = []
 
     private let storageOptions: [Double] = [1, 2, 5, 10, 20]
 
     var body: some View {
         Form {
+            Section("Microphone") {
+                if availableMicrophones.isEmpty {
+                    Text("No microphones detected. Plug in a microphone or check system permissions.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Input Device", selection: $selectedMicrophone) {
+                        Text("System Default").tag("")
+                        ForEach(availableMicrophones, id: \.uniqueID) { device in
+                            Text(device.localizedName).tag(device.uniqueID)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+
             Section("General") {
                 Toggle(isOn: $startAtLogin) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -108,6 +126,18 @@ internal struct DashboardPreferencesView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            loadMicrophones()
+        }
+    }
+
+    private func loadMicrophones() {
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        availableMicrophones = discoverySession.devices
     }
 
     private func updateLoginItem(enabled: Bool) {

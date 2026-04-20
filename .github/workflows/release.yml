@@ -174,12 +174,18 @@ jobs:
           CURRENT_COMMIT="$(git rev-parse HEAD)"
           SEMVER_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$'
           LATEST_TAG_VERSION=""
+          LATEST_TAG_HAS_RELEASE=true
+          RESUME_EXISTING_TAG=false
+          EXISTING_TAG_COMMIT=""
 
           if [ -n "$LATEST_TAG" ]; then
             LATEST_TAG_VERSION="${LATEST_TAG#v}"
             if ! [[ "$LATEST_TAG_VERSION" =~ $SEMVER_REGEX ]]; then
               echo "❌ Latest release tag $LATEST_TAG is not a supported semantic version"
               exit 1
+            fi
+            if ! gh release view "$LATEST_TAG" >/dev/null 2>&1; then
+              LATEST_TAG_HAS_RELEASE=false
             fi
             if version_gt "$LATEST_TAG_VERSION" "$BASE_VERSION"; then
               BASE_VERSION="$LATEST_TAG_VERSION"
@@ -196,6 +202,9 @@ jobs:
               exit 1
             fi
             VERSION="$INPUT_VERSION"
+          elif [ -n "$LATEST_TAG_VERSION" ] && [ "$LATEST_TAG_HAS_RELEASE" = "false" ]; then
+            VERSION="$LATEST_TAG_VERSION"
+            echo "ℹ️ Latest tag $LATEST_TAG exists without a GitHub release. Resuming release publish."
           elif [ -n "$LATEST_TAG_VERSION" ] && version_gt "$FILE_VERSION" "$LATEST_TAG_VERSION"; then
             VERSION="$FILE_VERSION"
             echo "ℹ️ VERSION already leads the latest tag. Reusing pending source version $VERSION."
@@ -229,23 +238,24 @@ jobs:
             exit 1
           fi
 
-          if git tag -l "$TAG" | grep -q "$TAG"; then
-            TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
-            if [ "$FILE_VERSION" != "$VERSION" ]; then
-              echo "❌ Tag $TAG already exists, but VERSION is still $FILE_VERSION. Update VERSION in source to resume that release."
-              exit 1
-            fi
-            if [ "$TAG_COMMIT" != "$CURRENT_COMMIT" ]; then
-              echo "❌ Tag $TAG already exists at $TAG_COMMIT, but HEAD is $CURRENT_COMMIT."
-              exit 1
-            fi
-            echo "ℹ️ Tag $TAG already exists without a GitHub release. Resuming release publish."
+          EXISTING_TAG_COMMIT="$(git ls-remote origin "refs/tags/$TAG" | awk '{print $1}' | head -1)"
+          if [ -z "$EXISTING_TAG_COMMIT" ] && git tag -l "$TAG" | grep -q "$TAG"; then
+            EXISTING_TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
+          fi
+
+          if [ -n "$EXISTING_TAG_COMMIT" ]; then
+            RESUME_EXISTING_TAG=true
+            echo "ℹ️ Tag $TAG already exists without a GitHub release. Reusing tagged commit $EXISTING_TAG_COMMIT."
           fi
 
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "source_version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "resume_existing_tag=$RESUME_EXISTING_TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$EXISTING_TAG_COMMIT" ]; then
+            echo "existing_tag_commit=$EXISTING_TAG_COMMIT" >> "$GITHUB_OUTPUT"
+          fi
           echo "🚀 Prepared release $TAG"
 
       - name: Run tests
@@ -308,6 +318,8 @@ jobs:
         id: commit_release_version
         env:
           EVENT_NAME: ${{ github.event_name }}
+          RESUME_EXISTING_TAG: ${{ steps.release_version.outputs.resume_existing_tag }}
+          EXISTING_TAG_COMMIT: ${{ steps.release_version.outputs.existing_tag_commit }}
         run: |
           TARGET_VERSION="${{ steps.release_version.outputs.version }}"
           FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
@@ -325,7 +337,14 @@ jobs:
             fi
           fi
 
-          if [ "$SHOULD_PUBLISH" = "true" ] && [ "$FILE_VERSION" != "$TARGET_VERSION" ]; then
+          if [ "$SHOULD_PUBLISH" = "true" ] && [ "$RESUME_EXISTING_TAG" = "true" ]; then
+            if [ -z "$EXISTING_TAG_COMMIT" ]; then
+              echo "❌ Resume requested for $TARGET_VERSION, but no existing tag commit was resolved."
+              exit 1
+            fi
+            CURRENT_COMMIT="$EXISTING_TAG_COMMIT"
+            echo "ℹ️ Reusing existing release tag commit $CURRENT_COMMIT"
+          elif [ "$SHOULD_PUBLISH" = "true" ] && [ "$FILE_VERSION" != "$TARGET_VERSION" ]; then
             printf '%s\n' "$TARGET_VERSION" > VERSION
 
             git config user.name "github-actions[bot]"
@@ -358,7 +377,7 @@ jobs:
             git push origin "$TAG"
           fi
 
-           cat > /tmp/release-notes.md <<'NOTES'
+          cat > /tmp/release-notes.md <<'NOTES'
           ## Installation
 
           1. Download the `.dmg` file below and drag **Whisp.app** into `/Applications/`.
@@ -366,51 +385,51 @@ jobs:
 
           NOTES
 
-           case "${{ steps.release_mode.outputs.mode }}" in
+          case "${{ steps.release_mode.outputs.mode }}" in
             notarized)
               cat >> /tmp/release-notes.md <<'NOTES'
-           3. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
-             - **Microphone** — for voice recording
-             - **Accessibility** — for Smart Paste
-             - **Input Monitoring** — for the global hotkey
+          3. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
+            - **Microphone** — for voice recording
+            - **Accessibility** — for Smart Paste
+            - **Input Monitoring** — for the global hotkey
 
-           NOTES
+          NOTES
               ;;
             signed)
               cat >> /tmp/release-notes.md <<'NOTES'
-           3. This build is signed with a Developer ID certificate but is not notarized. If macOS blocks it on first launch, run this once:
-             ```bash
-             sudo xattr -cr /Applications/Whisp.app
-             ```
-           4. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
-             - **Microphone** — for voice recording
-             - **Accessibility** — for Smart Paste
-             - **Input Monitoring** — for the global hotkey
+          3. This build is signed with a Developer ID certificate but is not notarized. If macOS blocks it on first launch, run this once:
+            ```bash
+            sudo xattr -cr /Applications/Whisp.app
+            ```
+          4. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
+            - **Microphone** — for voice recording
+            - **Accessibility** — for Smart Paste
+            - **Input Monitoring** — for the global hotkey
 
-           > You only need to run the `xattr` command once per download. Permissions persist across app restarts.
+          > You only need to run the `xattr` command once per download. Permissions persist across app restarts.
 
-           NOTES
+          NOTES
               ;;
             adhoc)
               cat >> /tmp/release-notes.md <<'NOTES'
-           3. Whisp is open-source and this build is not notarized. If macOS blocks it on first launch, run this once:
-             ```bash
-             sudo xattr -cr /Applications/Whisp.app
-             ```
-           4. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
-             - **Microphone** — for voice recording
-             - **Accessibility** — for Smart Paste
-             - **Input Monitoring** — for the global hotkey
+          3. Whisp is open-source and this build is not notarized. If macOS blocks it on first launch, run this once:
+            ```bash
+            sudo xattr -cr /Applications/Whisp.app
+            ```
+          4. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
+            - **Microphone** — for voice recording
+            - **Accessibility** — for Smart Paste
+            - **Input Monitoring** — for the global hotkey
 
-           > You only need to run the `xattr` command once per download. Permissions persist across app restarts.
+          > You only need to run the `xattr` command once per download. Permissions persist across app restarts.
 
-           NOTES
+          NOTES
               ;;
             *)
               echo "❌ Unknown release mode: ${{ steps.release_mode.outputs.mode }}"
               exit 1
               ;;
-           esac
+          esac
 
           # Append auto-generated changelog
           PREV_TAG="$(git tag --sort=-v:refname | grep -v "^$TAG$" | head -1 || true)"

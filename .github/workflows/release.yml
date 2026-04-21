@@ -22,11 +22,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - "v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
       version:
-        description: 'Semantic version to release (x.y.z). A tag vX.Y.Z will be created.'
+        description: "Semantic version to release (x.y.z). A tag vX.Y.Z will be created."
         required: true
         type: string
 
@@ -177,7 +177,8 @@ jobs:
 
       - name: Create fallback app zip
         if: ${{ steps.mode.outputs.include_zip == 'true' }}
-        run: ditto -c -k --keepParent "Whisp.app" "Whisp-${{ steps.v.outputs.version }}.zip"
+        run: ditto -c -k --keepParent "Whisp.app" "Whisp-${{ steps.v.outputs.version
+          }}.zip"
 
       - name: Create checksum
         run: |

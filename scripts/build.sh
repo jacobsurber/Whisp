@@ -57,6 +57,7 @@ fi
 
 # Clean previous builds
 rm -rf .build/release
+rm -rf .build/apple
 rm -rf Whisp.app
 rm -rf "$UNINSTALLER_APP_PATH"
 rm -f Sources/AudioProcessorCLI
@@ -103,7 +104,15 @@ fi
 
 # Build for release
 echo "📦 Building for release..."
+build_status=0
+set +e
 swift build -c release --arch arm64 --arch x86_64
+build_status=$?
+set -e
+
+if [ "$build_status" -ne 0 ]; then
+  echo "⚠️ swift build exited with status $build_status; validating release binaries before failing..."
+fi
 
 # Check for the actual binary instead of exit code (swift-collections emits spurious errors)
 if [ ! -f ".build/apple/Products/Release/Whisp" ]; then
@@ -113,6 +122,10 @@ fi
 if [ ! -f ".build/apple/Products/Release/${UNINSTALLER_EXECUTABLE}" ]; then
   echo "❌ Build failed - ${UNINSTALLER_EXECUTABLE} binary not found!"
   exit 1
+fi
+
+if [ "$build_status" -ne 0 ]; then
+  echo "⚠️ Continuing despite non-zero swift build exit because release binaries were produced."
 fi
 
 # Create app bundle
@@ -433,4 +446,9 @@ fi
 
 echo "✅ Build complete!"
 echo ""
-open -R Whisp.app
+
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+  echo "📦 Built artifact: Whisp.app"
+else
+  open -R Whisp.app
+fi

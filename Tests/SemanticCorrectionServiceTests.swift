@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Whisp
 
 final class SemanticCorrectionServiceTests: XCTestCase {
@@ -12,12 +13,12 @@ final class SemanticCorrectionServiceTests: XCTestCase {
 
     func testNormalizedEditDistanceCompletelyDifferent() {
         let distance = SemanticCorrectionService.normalizedEditDistance(a: "abc", b: "xyz")
-        XCTAssertEqual(distance, 1.0) // 3 substitutions / 3 = 1.0
+        XCTAssertEqual(distance, 1.0)  // 3 substitutions / 3 = 1.0
     }
 
     func testNormalizedEditDistanceOneCharDifference() {
         let distance = SemanticCorrectionService.normalizedEditDistance(a: "hello", b: "hallo")
-        XCTAssertEqual(distance, 0.2) // 1 substitution / 5 = 0.2
+        XCTAssertEqual(distance, 0.2)  // 1 substitution / 5 = 0.2
     }
 
     func testNormalizedEditDistanceEmptyOriginal() {
@@ -37,23 +38,23 @@ final class SemanticCorrectionServiceTests: XCTestCase {
 
     func testNormalizedEditDistanceInsertion() {
         let distance = SemanticCorrectionService.normalizedEditDistance(a: "helo", b: "hello")
-        XCTAssertEqual(distance, 0.2) // 1 insertion / 5 = 0.2
+        XCTAssertEqual(distance, 0.2)  // 1 insertion / 5 = 0.2
     }
 
     func testNormalizedEditDistanceDeletion() {
         let distance = SemanticCorrectionService.normalizedEditDistance(a: "hello", b: "helo")
-        XCTAssertEqual(distance, 0.2) // 1 deletion / 5 = 0.2
+        XCTAssertEqual(distance, 0.2)  // 1 deletion / 5 = 0.2
     }
 
     func testNormalizedEditDistanceUnicode() {
         let distance = SemanticCorrectionService.normalizedEditDistance(a: "café", b: "cafe")
-        XCTAssertEqual(distance, 0.25) // 1 change / 4 = 0.25
+        XCTAssertEqual(distance, 0.25)  // 1 change / 4 = 0.25
     }
 
     func testNormalizedEditDistanceEmoji() {
         let distance = SemanticCorrectionService.normalizedEditDistance(a: "hello 👋", b: "hello 🙋")
         // "hello 👋" is 7 characters (emoji is 1 character in Swift)
-        XCTAssertEqual(distance, 1.0 / 7.0, accuracy: 0.001) // 1 change / 7 chars
+        XCTAssertEqual(distance, 1.0 / 7.0, accuracy: 0.001)  // 1 change / 7 chars
     }
 
     // MARK: - Safe Merge Tests
@@ -73,7 +74,7 @@ final class SemanticCorrectionServiceTests: XCTestCase {
             corrected: "completely different text here",
             maxChangeRatio: 0.25
         )
-        XCTAssertEqual(result, "hello world") // Kept original
+        XCTAssertEqual(result, "hello world")  // Kept original
     }
 
     func testSafeMergeRejectsEmptyCorrected() {
@@ -112,7 +113,7 @@ final class SemanticCorrectionServiceTests: XCTestCase {
             corrected: "hallo",
             maxChangeRatio: 0.2
         )
-        XCTAssertEqual(result, "hallo") // 0.2 is NOT > 0.2, so accepted at boundary
+        XCTAssertEqual(result, "hallo")  // 0.2 is NOT > 0.2, so accepted at boundary
     }
 
     func testSafeMergeJustUnderThreshold() {
@@ -122,7 +123,7 @@ final class SemanticCorrectionServiceTests: XCTestCase {
             corrected: "hallo",
             maxChangeRatio: 0.21
         )
-        XCTAssertEqual(result, "hallo") // 0.2 < 0.21, accepted
+        XCTAssertEqual(result, "hallo")  // 0.2 < 0.21, accepted
     }
 
     func testSafeMergeWithFillerWordRemoval() {
@@ -151,13 +152,14 @@ final class SemanticCorrectionServiceTests: XCTestCase {
     func testSafeMergePreservesOriginalOnHallucination() {
         // LLM might hallucinate extra content
         let original = "The meeting is at 3pm"
-        let corrected = "The meeting is at 3pm. Please bring your laptop and prepare the quarterly report for discussion."
+        let corrected =
+            "The meeting is at 3pm. Please bring your laptop and prepare the quarterly report for discussion."
         let result = SemanticCorrectionService.safeMerge(
             original: original,
             corrected: corrected,
             maxChangeRatio: 0.25
         )
-        XCTAssertEqual(result, original) // Rejected due to too much change
+        XCTAssertEqual(result, original)  // Rejected due to too much change
     }
 
     // MARK: - Edge Cases
@@ -175,7 +177,7 @@ final class SemanticCorrectionServiceTests: XCTestCase {
         let original = String(repeating: "a", count: 1000)
         let corrected = String(repeating: "a", count: 990) + String(repeating: "b", count: 10)
         let distance = SemanticCorrectionService.normalizedEditDistance(a: original, b: corrected)
-        XCTAssertEqual(distance, 0.01, accuracy: 0.001) // 10 changes / 1000
+        XCTAssertEqual(distance, 0.01, accuracy: 0.001)  // 10 changes / 1000
     }
 
     func testSafeMergeWithZeroThreshold() {
@@ -184,7 +186,7 @@ final class SemanticCorrectionServiceTests: XCTestCase {
             corrected: "Hello",
             maxChangeRatio: 0.0
         )
-        XCTAssertEqual(result, "hello") // Any change rejected
+        XCTAssertEqual(result, "hello")  // Any change rejected
     }
 
     func testSafeMergeWithFullThreshold() {
@@ -193,6 +195,151 @@ final class SemanticCorrectionServiceTests: XCTestCase {
             corrected: "completely different",
             maxChangeRatio: 1.0
         )
-        XCTAssertEqual(result, "completely different") // All changes accepted
+        XCTAssertEqual(result, "completely different")  // All changes accepted
+    }
+
+    // MARK: - Personal Dictionary Tests
+
+    func testPersonalDictionaryInstructionsIncludeAliases() {
+        let snapshot = PersonalDictionarySnapshot(rules: [
+            PersonalDictionaryRule(preferredText: "Whisp", aliases: ["wisp", "whispp"]),
+            PersonalDictionaryRule(preferredText: "OpenAI", aliases: ["open ai"]),
+        ])
+
+        let instructions = SemanticCorrectionService.personalDictionaryInstructions(for: snapshot)
+
+        XCTAssertNotNil(instructions)
+        XCTAssertTrue(instructions?.contains("Whisp: wisp, whispp") == true)
+        XCTAssertTrue(instructions?.contains("OpenAI: open ai") == true)
+    }
+
+    func testPersonalDictionaryInstructionsTruncateLargePayload() {
+        let snapshot = PersonalDictionarySnapshot(
+            rules: (1...8).map {
+                PersonalDictionaryRule(
+                    preferredText: "Preferred \($0)",
+                    aliases: ["alias \($0)", "longer alias variant \($0)"]
+                )
+            })
+
+        let instructions = SemanticCorrectionService.personalDictionaryInstructions(
+            for: snapshot,
+            maximumRenderedLength: 260
+        )
+
+        XCTAssertNotNil(instructions)
+        XCTAssertLessThanOrEqual(instructions?.count ?? .max, 260)
+        XCTAssertTrue(instructions?.contains("Additional terms omitted for brevity.") == true)
+    }
+
+    func testPersonalDictionaryInstructionsSkipOverlongFirstRuleToStayWithinLimit() {
+        let veryLongAlias = Array(repeating: "excessively verbose alias segment", count: 12)
+            .joined(separator: ", ")
+        let snapshot = PersonalDictionarySnapshot(rules: [
+            PersonalDictionaryRule(preferredText: "Whisp", aliases: [veryLongAlias])
+        ])
+
+        let instructions = SemanticCorrectionService.personalDictionaryInstructions(
+            for: snapshot,
+            maximumRenderedLength: 200
+        )
+
+        XCTAssertNotNil(instructions)
+        XCTAssertLessThanOrEqual(instructions?.count ?? .max, 200)
+        XCTAssertFalse(instructions?.contains(veryLongAlias) == true)
+    }
+
+    func testApplyPersonalDictionaryCanonicalizesAliasesCaseInsensitively() {
+        let snapshot = PersonalDictionarySnapshot(rules: [
+            PersonalDictionaryRule(preferredText: "Whisp", aliases: ["wisp", "whispp"])
+        ])
+
+        let result = SemanticCorrectionService.applyPersonalDictionary(
+            to: "WISP is better than whispp right now.",
+            snapshot: snapshot
+        )
+
+        XCTAssertEqual(result, "Whisp is better than Whisp right now.")
+    }
+
+    func testApplyPersonalDictionaryMatchesLongerTermsFirst() {
+        let snapshot = PersonalDictionarySnapshot(rules: [
+            PersonalDictionaryRule(preferredText: "OpenAI API", aliases: ["open ai api"]),
+            PersonalDictionaryRule(preferredText: "OpenAI", aliases: ["open ai"]),
+        ])
+
+        let result = SemanticCorrectionService.applyPersonalDictionary(
+            to: "open ai api and open ai",
+            snapshot: snapshot
+        )
+
+        XCTAssertEqual(result, "OpenAI API and OpenAI")
+    }
+
+    func testApplyPersonalDictionaryDoesNotRewriteStructuredTokens() {
+        let snapshot = PersonalDictionarySnapshot(rules: [
+            PersonalDictionaryRule(preferredText: "Whisp", aliases: ["wisp"])
+        ])
+
+        let result = SemanticCorrectionService.applyPersonalDictionary(
+            to: "brew install wisp-cli and email name@wisp.ai plus wisp.",
+            snapshot: snapshot
+        )
+
+        XCTAssertEqual(result, "brew install wisp-cli and email name@wisp.ai plus Whisp.")
+    }
+
+    func testCanonicalizeUsingPersonalDictionaryRequiresEnabledFlag() {
+        let suiteName = "com.whisp.tests.personal-dictionary.disabled.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(false, forKey: AppDefaults.Keys.personalDictionaryEnabled)
+        let service = SemanticCorrectionService(
+            keychainService: MockKeychainService(),
+            personalDictionaryProvider: StaticPersonalDictionaryProvider(
+                snapshotValue: PersonalDictionarySnapshot(rules: [
+                    PersonalDictionaryRule(preferredText: "Whisp", aliases: ["wisp"])
+                ])
+            ),
+            defaults: defaults
+        )
+
+        let result = service.canonicalizeUsingPersonalDictionaryIfEnabled("wisp", mode: .cloud)
+        XCTAssertEqual(result, "wisp")
+    }
+
+    func testCanonicalizeUsingPersonalDictionaryRequiresSemanticCorrectionMode() {
+        let suiteName = "com.whisp.tests.personal-dictionary.mode.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: AppDefaults.Keys.personalDictionaryEnabled)
+        let service = SemanticCorrectionService(
+            keychainService: MockKeychainService(),
+            personalDictionaryProvider: StaticPersonalDictionaryProvider(
+                snapshotValue: PersonalDictionarySnapshot(rules: [
+                    PersonalDictionaryRule(preferredText: "Whisp", aliases: ["wisp"])
+                ])
+            ),
+            defaults: defaults
+        )
+
+        XCTAssertEqual(
+            service.canonicalizeUsingPersonalDictionaryIfEnabled("wisp", mode: .off),
+            "wisp"
+        )
+        XCTAssertEqual(
+            service.canonicalizeUsingPersonalDictionaryIfEnabled("wisp", mode: .cloud),
+            "Whisp"
+        )
+    }
+}
+
+private struct StaticPersonalDictionaryProvider: PersonalDictionaryProviding {
+    let snapshotValue: PersonalDictionarySnapshot
+
+    func snapshot() -> PersonalDictionarySnapshot {
+        snapshotValue
     }
 }

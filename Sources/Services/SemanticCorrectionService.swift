@@ -5,6 +5,8 @@ import os.log
 internal final class SemanticCorrectionService {
     private let mlxService = MLXCorrectionService()
     private let keychainService: KeychainServiceProtocol
+    private let personalDictionaryProvider: PersonalDictionaryProviding
+    private let defaults: UserDefaults
     private let logger = Logger(subsystem: "com.whisp.app", category: "SemanticCorrection")
 
     // Chunking configuration for 32k context window
@@ -18,8 +20,14 @@ internal final class SemanticCorrectionService {
         return AppCategoryManager.shared.category(for: id)
     }
 
-    init(keychainService: KeychainServiceProtocol = KeychainService.shared) {
+    init(
+        keychainService: KeychainServiceProtocol = KeychainService.shared,
+        personalDictionaryProvider: PersonalDictionaryProviding = PersonalDictionaryStore.shared,
+        defaults: UserDefaults = .standard
+    ) {
         self.keychainService = keychainService
+        self.personalDictionaryProvider = personalDictionaryProvider
+        self.defaults = defaults
     }
 
     func correct(text: String, providerUsed: TranscriptionProvider, sourceAppBundleId: String? = nil) async
@@ -37,48 +45,79 @@ internal final class SemanticCorrectionService {
         text: String, providerUsed: TranscriptionProvider, sourceAppBundleId: String? = nil
     ) async -> (text: String, warning: String?) {
         let modeRaw =
-            UserDefaults.standard.string(forKey: AppDefaults.Keys.semanticCorrectionMode)
+            defaults.string(forKey: AppDefaults.Keys.semanticCorrectionMode)
             ?? SemanticCorrectionMode.off.rawValue
         let mode = SemanticCorrectionMode(rawValue: modeRaw) ?? .off
+        let personalDictionary = currentPersonalDictionarySnapshot()
 
         let category = categoryFor(bundleId: sourceAppBundleId)
         logger.info("Correction category: \(category.id) for bundleId: \(sourceAppBundleId ?? "nil")")
+
+        let outcome: (text: String, warning: String?)
 
         switch mode {
         case .off:
             return (text, nil)
         case .localMLX:
-            // Allow local MLX correction regardless of STT provider
             logger.info("Running local MLX correction")
-            return await correctLocallyWithMLX(text: text, category: category)
+            outcome = await correctLocallyWithMLX(
+                text: text,
+                category: category,
+                personalDictionary: personalDictionary
+            )
         case .cloud:
             switch providerUsed {
             case .openai:
                 logger.info("Running cloud correction: OpenAI")
-                return (await correctWithOpenAI(text: text, category: category), nil)
+                outcome = (
+                    await correctWithOpenAI(
+                        text: text,
+                        category: category,
+                        personalDictionary: personalDictionary
+                    ),
+                    nil
+                )
             case .gemini:
                 logger.info("Running cloud correction: Gemini")
-                return (await correctWithGemini(text: text, category: category), nil)
+                outcome = (
+                    await correctWithGemini(
+                        text: text,
+                        category: category,
+                        personalDictionary: personalDictionary
+                    ),
+                    nil
+                )
             case .local, .parakeet, .gemma, .whisperMLX:
                 // Don't send local text to cloud.
-                return (text, nil)
+                outcome = (text, nil)
             }
         }
+
+        return (
+            canonicalizeUsingPersonalDictionaryIfEnabled(
+                outcome.text,
+                mode: mode,
+                snapshot: personalDictionary
+            ),
+            outcome.warning
+        )
     }
 
     // MARK: - Local (MLX)
-    private func correctLocallyWithMLX(text: String, category: CategoryDefinition) async -> (
-        text: String, warning: String?
-    ) {
+    private func correctLocallyWithMLX(
+        text: String,
+        category: CategoryDefinition,
+        personalDictionary: PersonalDictionarySnapshot?
+    ) async -> (text: String, warning: String?) {
         guard Arch.isAppleSilicon else {
             return (text, "Local semantic correction requires an Apple Silicon Mac.")
         }
         let modelRepo =
-            UserDefaults.standard.string(forKey: AppDefaults.Keys.semanticCorrectionModelRepo)
+            defaults.string(forKey: AppDefaults.Keys.semanticCorrectionModelRepo)
             ?? AppDefaults.defaultSemanticCorrectionModelRepo
         do {
             let pyURL = try UvBootstrap.ensureVenv(userPython: nil)
-            let prompt = loadPrompt(for: category)
+            let prompt = loadPrompt(for: category, personalDictionary: personalDictionary)
             let output = try await mlxService.correct(
                 text: text, modelRepo: modelRepo, pythonPath: pyURL.path, systemPrompt: prompt)
             let merged = Self.safeMerge(original: text, corrected: output, maxChangeRatio: 0.6)
@@ -98,11 +137,15 @@ internal final class SemanticCorrectionService {
     }
 
     // MARK: - Cloud (OpenAI)
-    private func correctWithOpenAI(text: String, category: CategoryDefinition) async -> String {
+    private func correctWithOpenAI(
+        text: String,
+        category: CategoryDefinition,
+        personalDictionary: PersonalDictionarySnapshot?
+    ) async -> String {
         guard let apiKey = keychainService.getQuietly(service: "Whisp", account: "OpenAI") else {
             return text
         }
-        let prompt = loadPrompt(for: category)
+        let prompt = loadPrompt(for: category, personalDictionary: personalDictionary)
         let url = "https://api.openai.com/v1/chat/completions"
         let headers: HTTPHeaders = [
             "Authorization": "Bearer \(apiKey)",
@@ -142,14 +185,18 @@ internal final class SemanticCorrectionService {
 
     // MARK: - Cloud (Gemini)
     private var geminiBaseURL: String {
-        let custom = UserDefaults.standard.string(forKey: "geminiBaseURL") ?? ""
+        let custom = defaults.string(forKey: "geminiBaseURL") ?? ""
         if custom.isEmpty {
             return "https://generativelanguage.googleapis.com"
         }
         return custom.hasSuffix("/") ? String(custom.dropLast()) : custom
     }
 
-    private func correctWithGemini(text: String, category: CategoryDefinition) async -> String {
+    private func correctWithGemini(
+        text: String,
+        category: CategoryDefinition,
+        personalDictionary: PersonalDictionarySnapshot?
+    ) async -> String {
         guard let apiKey = keychainService.getQuietly(service: "Whisp", account: "Gemini") else {
             return text
         }
@@ -158,7 +205,7 @@ internal final class SemanticCorrectionService {
             "X-Goog-Api-Key": apiKey,
             "Content-Type": "application/json",
         ]
-        let prompt = loadPrompt(for: category)
+        let prompt = loadPrompt(for: category, personalDictionary: personalDictionary)
         let body: [String: Any] = [
             "contents": [
                 [
@@ -171,7 +218,7 @@ internal final class SemanticCorrectionService {
             ],
             "generationConfig": [
                 "temperature": 0.3,
-                "maxOutputTokens": 8192,  // Standardized limit
+                "maxOutputTokens": 8192,
             ],
         ]
         do {
@@ -204,19 +251,42 @@ internal final class SemanticCorrectionService {
         .appendingPathComponent("Whisp/prompts", isDirectory: true)
     }
 
-    private func loadPrompt(for category: CategoryDefinition) -> String {
-        // First try user-customized prompt file
+    private func loadPrompt(
+        for category: CategoryDefinition,
+        personalDictionary: PersonalDictionarySnapshot?
+    ) -> String {
+        let basePrompt: String
+
         if let base = promptsBaseDir() {
             let url = base.appendingPathComponent("\(category.id)_prompt.txt")
             if let userPrompt = try? String(contentsOf: url, encoding: .utf8), !userPrompt.isEmpty {
-                return userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                basePrompt = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                let trimmed = category.promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    basePrompt = trimmed
+                } else {
+                    basePrompt = CategoryDefinition.fallback.promptTemplate.trimmingCharacters(
+                        in: .whitespacesAndNewlines)
+                }
+            }
+        } else {
+            let trimmed = category.promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                basePrompt = trimmed
+            } else {
+                basePrompt = CategoryDefinition.fallback.promptTemplate.trimmingCharacters(
+                    in: .whitespacesAndNewlines)
             }
         }
-        let trimmed = category.promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return trimmed
+
+        guard let personalDictionary,
+            let instructions = Self.personalDictionaryInstructions(for: personalDictionary)
+        else {
+            return basePrompt
         }
-        return CategoryDefinition.fallback.promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return "\(basePrompt)\n\n\(instructions)"
     }
 
     private func readPromptFile(name: String) -> String? {
@@ -226,7 +296,124 @@ internal final class SemanticCorrectionService {
         return try? String(contentsOf: url, encoding: .utf8)
     }
 
+    func canonicalizeUsingPersonalDictionaryIfEnabled(
+        _ text: String,
+        mode: SemanticCorrectionMode? = nil
+    ) -> String {
+        let effectiveMode: SemanticCorrectionMode
+        if let mode {
+            effectiveMode = mode
+        } else {
+            let rawValue =
+                defaults.string(forKey: AppDefaults.Keys.semanticCorrectionMode)
+                ?? SemanticCorrectionMode.off.rawValue
+            effectiveMode = SemanticCorrectionMode(rawValue: rawValue) ?? .off
+        }
+
+        return canonicalizeUsingPersonalDictionaryIfEnabled(
+            text,
+            mode: effectiveMode,
+            snapshot: currentPersonalDictionarySnapshot()
+        )
+    }
+
+    private func currentPersonalDictionarySnapshot() -> PersonalDictionarySnapshot? {
+        guard defaults.bool(forKey: AppDefaults.Keys.personalDictionaryEnabled) else {
+            return nil
+        }
+
+        let snapshot = personalDictionaryProvider.snapshot()
+        return snapshot.isEmpty ? nil : snapshot
+    }
+
+    private func canonicalizeUsingPersonalDictionaryIfEnabled(
+        _ text: String,
+        mode: SemanticCorrectionMode,
+        snapshot: PersonalDictionarySnapshot?
+    ) -> String {
+        guard mode != .off, let snapshot, !snapshot.isEmpty else {
+            return text
+        }
+
+        return Self.applyPersonalDictionary(to: text, snapshot: snapshot)
+    }
+
     // MARK: - Safety Guard (internal for testability)
+    static func personalDictionaryInstructions(
+        for snapshot: PersonalDictionarySnapshot,
+        maximumRenderedLength: Int = 1800
+    ) -> String? {
+        guard !snapshot.isEmpty else { return nil }
+
+        let omittedLine = "- Additional terms omitted for brevity."
+        let headerLines = [
+            "Personal dictionary:",
+            "- When one of these terms is relevant, use the exact preferred spelling.",
+            "- Do not invent a dictionary term unless the audio clearly referred to it.",
+        ]
+
+        let headerLength = headerLines.joined(separator: "\n").count
+        guard headerLength <= maximumRenderedLength else { return nil }
+
+        var lines = headerLines
+        var renderedLength = headerLength
+        var includedCount = 0
+
+        func appendLineIfFits(_ line: String) -> Bool {
+            let separatorLength = lines.isEmpty ? 0 : 1
+            guard renderedLength + separatorLength + line.count <= maximumRenderedLength else {
+                return false
+            }
+
+            lines.append(line)
+            renderedLength += separatorLength + line.count
+            return true
+        }
+
+        for rule in snapshot.rules {
+            let line: String
+            if rule.aliases.isEmpty {
+                line = "- \(rule.preferredText)"
+            } else {
+                line = "- \(rule.preferredText): \(rule.aliases.joined(separator: ", "))"
+            }
+
+            guard appendLineIfFits(line) else {
+                break
+            }
+            includedCount += 1
+        }
+
+        if includedCount < snapshot.rules.count {
+            while !appendLineIfFits(omittedLine), includedCount > 1 {
+                let removedLine = lines.removeLast()
+                renderedLength -= removedLine.count + 1
+                includedCount -= 1
+            }
+
+            _ = appendLineIfFits(omittedLine)
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    static func applyPersonalDictionary(to text: String, snapshot: PersonalDictionarySnapshot) -> String {
+        guard !text.isEmpty, !snapshot.isEmpty else { return text }
+
+        var result = text
+        for pattern in canonicalizationPatterns(from: snapshot) {
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            result = pattern.regex.stringByReplacingMatches(
+                in: result,
+                options: [],
+                range: range,
+                withTemplate: pattern.replacement
+            )
+        }
+
+        return result
+    }
+
     static func safeMerge(original: String, corrected: String, maxChangeRatio: Double) -> String {
         guard !corrected.isEmpty else { return original }
         let ratio = normalizedEditDistance(a: original, b: corrected)
@@ -237,8 +424,6 @@ internal final class SemanticCorrectionService {
     static func normalizedEditDistance(a: String, b: String) -> Double {
         if a == b { return 0 }
 
-        // Cap strings to prevent OOM on very long texts
-        // 5000 chars is enough to detect significant changes while keeping memory usage reasonable
         let maxLength = 5000
         let aChars = Array(a.prefix(maxLength))
         let bChars = Array(b.prefix(maxLength))
@@ -263,6 +448,41 @@ internal final class SemanticCorrectionService {
         let dist = dp[m][n]
         let denom = max(m, n)
         return Double(dist) / Double(denom)
+    }
+
+    private static func canonicalizationPatterns(
+        from snapshot: PersonalDictionarySnapshot
+    ) -> [(regex: NSRegularExpression, replacement: String, length: Int)] {
+        var patterns: [(regex: NSRegularExpression, replacement: String, length: Int)] = []
+
+        for rule in snapshot.rules {
+            for variant in [rule.preferredText] + rule.aliases {
+                let escapedVariant = NSRegularExpression.escapedPattern(for: variant)
+                let pattern =
+                    "(?<![\\p{L}\\p{N}@_\\-/])(?<![\\p{L}\\p{N}]\\.)\(escapedVariant)(?![\\p{L}\\p{N}@_\\-/])(?!\\.[\\p{L}\\p{N}])"
+
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+                else {
+                    continue
+                }
+
+                patterns.append(
+                    (
+                        regex: regex,
+                        replacement: NSRegularExpression.escapedTemplate(for: rule.preferredText),
+                        length: variant.count
+                    ))
+            }
+        }
+
+        patterns.sort {
+            if $0.length == $1.length {
+                return $0.replacement.count > $1.replacement.count
+            }
+            return $0.length > $1.length
+        }
+
+        return patterns
     }
 }
 

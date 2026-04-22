@@ -9,4 +9,5 @@ internal class AppDelegate: NSObject, NSApplicationDelegate {
     var fnGlobeMonitor: FnGlobeMonitor?
     var pressAndHoldConfiguration = PressAndHoldSettings.configuration()
     var pressAndHoldTriggerState = PressAndHoldTriggerState()
+    var dashboardWindowPresenter: DashboardWindowPresenting = DashboardWindowManager.shared
 }

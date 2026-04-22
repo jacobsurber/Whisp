@@ -62,7 +62,8 @@ extension AppDelegate {
 
         // Auto-open dashboard on first launch or welcome version bump so onboarding sheet is presented
         let hasCompletedWelcome = UserDefaults.standard.bool(forKey: AppDefaults.Keys.hasCompletedWelcome)
-        let lastWelcomeVersion = UserDefaults.standard.string(forKey: AppDefaults.Keys.lastWelcomeVersion) ?? "0"
+        let lastWelcomeVersion =
+            UserDefaults.standard.string(forKey: AppDefaults.Keys.lastWelcomeVersion) ?? "0"
         if !hasCompletedWelcome || lastWelcomeVersion != AppDefaults.currentWelcomeVersion {
             DashboardWindowManager.shared.showDashboardWindow()
         }
@@ -79,6 +80,11 @@ extension AppDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false  // Keep app running in menu bar
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        dashboardWindowPresenter.showDashboardWindow(selectedNav: nil)
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {

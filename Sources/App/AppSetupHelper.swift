@@ -1,21 +1,29 @@
+import AppKit
 import Foundation
 import ServiceManagement
-import AppKit
 import os.log
 
 internal class AppSetupHelper {
     static func setupApp() {
-        // Only set activation policy if NSApp is available (not in unit tests)
-        if Thread.isMainThread && NSApplication.shared.delegate != nil {
-            NSApplication.shared.setActivationPolicy(.accessory)
-        }
+        _ = configureLaunchActivationPolicy()
         setupLoginItem()
         ensurePromptFiles()
     }
-    
+
+    @discardableResult
+    static func configureLaunchActivationPolicy(
+        appIsReady: Bool = Thread.isMainThread && NSApplication.shared.delegate != nil,
+        setActivationPolicy: (NSApplication.ActivationPolicy) -> Bool = {
+            NSApplication.shared.setActivationPolicy($0)
+        }
+    ) -> Bool {
+        guard appIsReady else { return false }
+        return setActivationPolicy(.regular)
+    }
+
     static func setupLoginItem() {
-        let startAtLogin = UserDefaults.standard.object(forKey: "startAtLogin") as? Bool ?? true // Default to true
-        
+        let startAtLogin = UserDefaults.standard.object(forKey: "startAtLogin") as? Bool ?? true  // Default to true
+
         if startAtLogin {
             // Only try to register if we're in a real app context, not in tests
             if Bundle.main.bundleIdentifier != nil && !isRunningInTests() {
@@ -23,135 +31,138 @@ internal class AppSetupHelper {
             }
         }
     }
-    
+
     private static func isRunningInTests() -> Bool {
         return NSClassFromString("XCTestCase") != nil
     }
-    
+
     static func createMenuBarIcon(isRecording: Bool = false) -> NSImage {
         let iconSize = getAdaptiveMenuBarIconSize()
         let config = NSImage.SymbolConfiguration(pointSize: iconSize, weight: .medium)
 
         // Use different icons for recording vs idle state
         let symbolName = isRecording ? "mic.circle.fill" : "mic.circle"
-        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: LocalizedStrings.Accessibility.microphoneIcon)?.withSymbolConfiguration(config)
-        image?.isTemplate = true // This makes it adapt to menu bar appearance (dark/light mode)
+        let image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: LocalizedStrings.Accessibility.microphoneIcon)?.withSymbolConfiguration(
+                config)
+        image?.isTemplate = true  // This makes it adapt to menu bar appearance (dark/light mode)
         return image ?? NSImage()
     }
-    
+
     // MARK: - Menu Bar Icon Constants
     private static let STANDARD_MENU_BAR_HEIGHT: CGFloat = 24.0
     private static let NOTCHED_MENU_BAR_THRESHOLD: CGFloat = 26.0
     private static let STANDARD_ICON_SIZE: CGFloat = 16.0  // For regular displays
-    private static let NOTCHED_ICON_SIZE: CGFloat = 20.0   // For notched displays (taller menu bar)
-    
+    private static let NOTCHED_ICON_SIZE: CGFloat = 20.0  // For notched displays (taller menu bar)
+
     // Display detection constants
     private static let NOTCHED_ASPECT_RATIO_MIN: CGFloat = 1.5
     private static let NOTCHED_ASPECT_RATIO_MAX: CGFloat = 1.6
     private static let NOTCHED_MIN_HEIGHT: CGFloat = 1900.0
-    
+
     // Cache for icon size to avoid repeated calculations
     private static var _cachedIconSize: CGFloat?
     private static var _lastMainScreenFrame: NSRect?
-    
+
     /// Reset the cached icon size - useful when display configuration changes
     static func resetIconSizeCache() {
         _cachedIconSize = nil
         _lastMainScreenFrame = nil
     }
-    
+
     static func getAdaptiveMenuBarIconSize() -> CGFloat {
         // Check for user override first
         if let overrideSize = UserDefaults.standard.object(forKey: "menuBarIconSize") as? Double,
-           overrideSize > 0 {
+            overrideSize > 0
+        {
             return CGFloat(overrideSize)
         }
-        
+
         // For menu bar items, we should use the screen where the status item is located
         // not necessarily the main screen
         guard let statusItemScreen = getStatusItemScreen() else {
             // Fallback to standard size if we can't detect the screen
             return STANDARD_ICON_SIZE
         }
-        
+
         // Check if screen configuration has changed by comparing frame
         let currentFrame = statusItemScreen.frame
-        
-        if let cached = _cachedIconSize, 
-           let lastFrame = _lastMainScreenFrame,
-           NSEqualRects(lastFrame, currentFrame) {
+
+        if let cached = _cachedIconSize,
+            let lastFrame = _lastMainScreenFrame,
+            NSEqualRects(lastFrame, currentFrame)
+        {
             return cached
         }
-        
+
         // Detect if display has notch (taller menu bar) on the correct screen
         let hasNotch = detectDisplayNotchForScreen(statusItemScreen)
-        
+
         // Adaptive sizing based on menu bar height
         let iconSize: CGFloat = hasNotch ? NOTCHED_ICON_SIZE : STANDARD_ICON_SIZE
-        
+
         // Cache the result
         _cachedIconSize = iconSize
         _lastMainScreenFrame = currentFrame
-        
+
         return iconSize
     }
-    
+
     private static func getStatusItemScreen() -> NSScreen? {
         // Try to get the screen where the menu bar is displayed
         // In most cases, this is the screen with menu bar
-        for screen in NSScreen.screens {
-            // The screen with the menu bar typically has y origin at 0
-            if screen.frame.origin.y == 0 {
-                return screen
-            }
+        for screen in NSScreen.screens where screen.frame.origin.y == 0 {
+            return screen
         }
         // Fallback to main screen
         return NSScreen.main
     }
-    
+
     private static func detectDisplayNotch() -> Bool {
         guard let mainScreen = NSScreen.main else {
             return false  // Default to no notch if screen detection fails
         }
         return detectDisplayNotchForScreen(mainScreen)
     }
-    
+
     private static func detectDisplayNotchForScreen(_ screen: NSScreen) -> Bool {
         // Check safe area insets (macOS 12+) - most reliable method
         // Notched displays have safe area insets at the top for the notch
         if #available(macOS 12.0, *) {
             return screen.safeAreaInsets.top > 0
         }
-        
+
         // For older macOS versions, assume no notch
         return false
     }
-    
-    
+
     static func checkFirstRun() -> Bool {
         let hasExistingProvider = UserDefaults.standard.string(forKey: "transcriptionProvider") != nil
         let hasCompletedWelcome = UserDefaults.standard.bool(forKey: "hasCompletedWelcome")
         let lastWelcomeVersion = UserDefaults.standard.string(forKey: "lastWelcomeVersion") ?? "0"
-        
+
         let currentWelcomeVersion = AppDefaults.currentWelcomeVersion
-        
+
         // Show welcome for new users OR existing users who haven't seen the SmartPaste welcome
-        let shouldShowWelcome = (!hasExistingProvider && !hasCompletedWelcome) || (lastWelcomeVersion != currentWelcomeVersion)
-        
+        let shouldShowWelcome =
+            (!hasExistingProvider && !hasCompletedWelcome) || (lastWelcomeVersion != currentWelcomeVersion)
+
         if shouldShowWelcome {
             if !hasExistingProvider {
                 // First run - default to LocalWhisper
-                UserDefaults.standard.set(TranscriptionProvider.local.rawValue, forKey: "transcriptionProvider")
+                UserDefaults.standard.set(
+                    TranscriptionProvider.local.rawValue, forKey: "transcriptionProvider")
             }
             return true
         } else if !hasExistingProvider {
             // Provider was somehow reset - default to LocalWhisper
             UserDefaults.standard.set(TranscriptionProvider.local.rawValue, forKey: "transcriptionProvider")
         }
-        
+
         return false
     }
-    
+
     // Removed: cleanupOldTemporaryFiles() - no longer needed since audio files are deleted immediately after transcription
 
     // MARK: - Prompt Files
@@ -171,7 +182,7 @@ internal class AppSetupHelper {
             let files: [(name: String, content: String)] = [
                 ("local_mlx_prompt.txt", defaultLocalMLXPrompt),
                 ("cloud_openai_prompt.txt", defaultCloudPrompt),
-                ("cloud_gemini_prompt.txt", defaultCloudPrompt)
+                ("cloud_gemini_prompt.txt", defaultCloudPrompt),
             ]
 
             for f in files {
@@ -185,7 +196,8 @@ internal class AppSetupHelper {
         }
     }
 
-    private static let defaultCloudPrompt = "You are a transcription corrector. Fix grammar, casing, punctuation, and obvious mis-hearings that do not change meaning. Remove filler words and transcribed pauses that add no meaning (e.g., 'um', 'uh', 'erm', 'you know', 'like' as filler; '[pause]', '(pause)', ellipses for hesitations). Do not remove meaningful words. Do not summarize or add content. Output only the corrected text."
+    private static let defaultCloudPrompt =
+        "You are a transcription corrector. Fix grammar, casing, punctuation, and obvious mis-hearings that do not change meaning. Remove filler words and transcribed pauses that add no meaning (e.g., 'um', 'uh', 'erm', 'you know', 'like' as filler; '[pause]', '(pause)', ellipses for hesitations). Do not remove meaningful words. Do not summarize or add content. Output only the corrected text."
 
     private static let defaultLocalMLXPrompt = defaultCloudPrompt
 }

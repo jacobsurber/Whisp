@@ -91,7 +91,11 @@ rm -rf "${STAGING_DIR}"
 
 if [ -f "${DMG_NAME}" ]; then
   echo "Created ${DMG_NAME} ($(du -h "${DMG_NAME}" | cut -f1))"
-  open -R "${DMG_NAME}"
+  if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "📦 Built artifact: ${DMG_NAME}"
+  else
+    open -R "${DMG_NAME}"
+  fi
 else
   echo "Error: Failed to create DMG"
   exit 1

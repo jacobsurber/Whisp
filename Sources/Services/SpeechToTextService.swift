@@ -177,7 +177,8 @@ internal class SpeechToTextService {
             return await correctionService.correct(text: text, providerUsed: .parakeet)
         case .gemma:
             // Gemma combines transcription + correction in one pass; skip separate correction
-            return try await transcribeWithGemma(audioURL: audioURL)
+            let text = try await transcribeWithGemma(audioURL: audioURL)
+            return correctionService.canonicalizeUsingPersonalDictionaryIfEnabled(text)
         case .whisperMLX:
             let text = try await transcribeWithWhisperMLX(audioURL: audioURL)
             return await correctionService.correct(text: text, providerUsed: .whisperMLX)

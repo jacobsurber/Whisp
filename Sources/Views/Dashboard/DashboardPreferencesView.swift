@@ -16,98 +16,99 @@ internal struct DashboardPreferencesView: View {
     private let storageOptions: [Double] = [1, 2, 5, 10, 20]
 
     var body: some View {
-        Form {
-            Section("General") {
-                Toggle(isOn: $startAtLogin) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Start at Login")
-                        Text("Launch Whisp when you sign in.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: DashboardTheme.Spacing.lg) {
+                SettingsSectionCard(title: "General", icon: "gearshape") {
+                    SettingsToggleRow(
+                        title: "Start at Login",
+                        subtitle: "Launch Whisp automatically when you sign in",
+                        isOn: $startAtLogin
+                    )
+                    .onChange(of: startAtLogin) { _, newValue in
+                        updateLoginItem(enabled: newValue)
+                    }
+
+                    SettingsDivider()
+
+                    SettingsToggleRow(
+                        title: "Floating Microphone Dock",
+                        subtitle: "Show a floating mic button across all apps",
+                        isOn: $floatingMicrophoneDockEnabled
+                    )
+
+                    SettingsDivider()
+
+                    SettingsToggleRow(
+                        title: "Auto-Boost Microphone",
+                        subtitle: "Boost mic volume while recording",
+                        isOn: $autoBoostMicrophoneVolume
+                    )
+
+                    SettingsDivider()
+
+                    SettingsToggleRow(
+                        title: "Smart Paste",
+                        subtitle: "Paste transcription into the active app",
+                        isOn: $enableSmartPaste
+                    )
+
+                    SettingsDivider()
+
+                    SettingsToggleRow(
+                        title: "Completion Sound",
+                        subtitle: "Play a sound when transcription is ready",
+                        isOn: $playCompletionSound
+                    )
+
+                    if let loginItemError {
+                        SettingsDivider()
+                        Text(loginItemError)
+                            .font(.system(size: 12))
+                            .foregroundStyle(DashboardTheme.destructive)
+                            .padding(.horizontal, DashboardTheme.Spacing.md)
+                            .padding(.vertical, 10)
                     }
                 }
-                .onChange(of: startAtLogin) { _, newValue in
-                    updateLoginItem(enabled: newValue)
+
+                SettingsSectionCard(title: "Model Storage", icon: "internaldrive") {
+                    SettingsPickerRow(
+                        title: "Storage Limit",
+                        subtitle: "Maximum disk space for downloaded models",
+                        selection: $maxModelStorageGB,
+                        options: storageOptions,
+                        display: { "\(Int($0)) GB" }
+                    )
                 }
 
-                Toggle(isOn: $floatingMicrophoneDockEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Floating Microphone Dock")
-                        Text("Show a floating mic button across all apps.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                SettingsSectionCard(title: "About", icon: "info.circle") {
+                    SettingsLabelValueRow(
+                        label: "Version",
+                        value: VersionInfo.fullVersionInfo,
+                        isMono: true
+                    )
+
+                    if VersionInfo.gitHash != "dev-build" && VersionInfo.gitHash != "unknown" {
+                        SettingsDivider()
+                        SettingsLabelValueRow(
+                            label: "Git",
+                            value: VersionInfo.gitHash,
+                            isMono: true
+                        )
                     }
-                }
 
-                Toggle(isOn: $autoBoostMicrophoneVolume) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Auto-Boost Microphone")
-                        Text("Boost mic volume while recording.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if !VersionInfo.buildDate.isEmpty {
+                        SettingsDivider()
+                        SettingsLabelValueRow(
+                            label: "Built",
+                            value: VersionInfo.buildDate,
+                            isMono: true
+                        )
                     }
-                }
-
-                Toggle(isOn: $enableSmartPaste) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Smart Paste")
-                        Text("Paste transcription into the active app.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Toggle(isOn: $playCompletionSound) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Completion Sound")
-                        Text("Play a sound when done.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if let loginItemError {
-                    Text(loginItemError)
-                        .foregroundStyle(Color(nsColor: .systemRed))
                 }
             }
-
-            Section("Model Storage") {
-                Picker("Storage limit", selection: $maxModelStorageGB) {
-                    ForEach(storageOptions, id: \.self) { option in
-                        Text("\(Int(option)) GB").tag(option)
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-
-            Section("About") {
-                LabeledContent("Version") {
-                    Text(VersionInfo.fullVersionInfo)
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-
-                if VersionInfo.gitHash != "dev-build" && VersionInfo.gitHash != "unknown" {
-                    LabeledContent("Git") {
-                        Text(VersionInfo.gitHash)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-
-                if !VersionInfo.buildDate.isEmpty {
-                    LabeledContent("Built") {
-                        Text(VersionInfo.buildDate)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
+            .padding(DashboardTheme.Spacing.lg)
         }
-        .formStyle(.grouped)
+        .background(DashboardTheme.pageBg)
     }
 
     private func updateLoginItem(enabled: Bool) {

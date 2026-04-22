@@ -15,7 +15,7 @@ extension AppDelegate {
 
     @MainActor @objc func showSettings() {
         Logger.app.info("Settings menu item selected")
-        DashboardWindowManager.shared.showDashboardWindow()
+        dashboardWindowPresenter.showDashboardWindow(selectedNav: nil)
     }
 
     @objc func screenConfigurationChanged() {

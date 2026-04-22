@@ -14,6 +14,11 @@ internal protocol DashboardWindowAppControlling: AnyObject {
     func activate() -> Bool
 }
 
+@MainActor
+internal protocol DashboardWindowPresenting: AnyObject {
+    func showDashboardWindow(selectedNav: DashboardNavItem?)
+}
+
 private final class LiveDashboardWindowAppController: DashboardWindowAppControlling {
     var activationPolicy: NSApplication.ActivationPolicy {
         NSApp.activationPolicy()
@@ -32,7 +37,7 @@ private final class LiveDashboardWindowAppController: DashboardWindowAppControll
 
 /// Manages the dashboard window lifecycle
 @MainActor
-internal final class DashboardWindowManager: NSObject {
+internal final class DashboardWindowManager: NSObject, DashboardWindowPresenting {
     static let shared = DashboardWindowManager()
 
     private static let frameAutosaveName = NSWindow.FrameAutosaveName("WhispDashboardWindow")

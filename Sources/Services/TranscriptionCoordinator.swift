@@ -107,6 +107,11 @@ internal final class TranscriptionCoordinator {
             if !trimmed.isEmpty {
                 finalText = outcome.text
             }
+        } else if mode != .off && transcriptionProvider == .gemma {
+            finalText = semanticCorrectionService.canonicalizeUsingPersonalDictionaryIfEnabled(
+                text,
+                mode: mode
+            )
         }
 
         try Task.checkCancellation()

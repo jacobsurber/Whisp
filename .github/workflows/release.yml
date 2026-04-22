@@ -1,12 +1,37 @@
 name: Release
 
+# Release model (first principles):
+#
+#   * The git tag is the single source of truth for a release version.
+#     A release is produced iff a `vX.Y.Z` tag exists (or is created here).
+#
+#   * Three entry points, same job:
+#       1. `push` of a `vX.Y.Z` tag   -> build and publish that tag.
+#       2. `workflow_dispatch`        -> pick a bump (patch/minor/major) or
+#          provide an explicit version; the workflow creates the tag.
+#       3. `push` to `master` whose   -> opt-in auto-release. The head
+#          head commit message         commit message must contain
+#          contains `[release]`        `[release]` (defaults to patch) or
+#                                      `[release:patch|minor|major]`.
+#
+#   * CI never mutates `master` (no VERSION bump commits, no branch pushes).
+#     Branch protection therefore cannot break releases.
+#
+#   * Publishing is idempotent. Re-running the workflow for the same tag
+#     updates the existing release and re-uploads assets instead of failing.
+#
+#   * The `VERSION` file in the repo is optional metadata for local dev
+#     builds; at release time the tag overrides it via `WHISP_VERSION`.
+
 on:
   push:
-    branches: [ master ]
+    branches: [master]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump to apply when version is not provided
+        description: "Version bump to apply (ignored if 'version' is set)."
         required: true
         default: patch
         type: choice
@@ -15,7 +40,7 @@ on:
           - minor
           - major
       version:
-        description: Optional explicit version in x.y.z format
+        description: "Optional explicit version x.y.z (overrides bump)."
         required: false
         type: string
 
@@ -28,8 +53,6 @@ permissions:
 
 jobs:
   build-and-release:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.actor !=
-      'github-actions[bot]' }}
     runs-on: macos-15
     env:
       WHISP_APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -44,395 +67,282 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require master branch
+      - name: Resolve release version
+        id: v
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_VERSION: ${{ inputs.version }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
-          if [ "$GITHUB_REF_NAME" != "master" ]; then
-            echo "❌ Run this workflow from master so the VERSION bump lands on the release branch."
+          set -euo pipefail
+
+          bump_version() {
+            local base="$1" kind="$2" major minor patch
+            IFS='.' read -r major minor patch <<<"$base"
+            case "$kind" in
+              major) echo "$((major + 1)).0.0" ;;
+              minor) echo "${major}.$((minor + 1)).0" ;;
+              patch) echo "${major}.${minor}.$((patch + 1))" ;;
+              *) echo "::error::Unknown bump '$kind'" >&2; return 1 ;;
+            esac
+          }
+
+          latest_semver_tag() {
+            git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1
+          }
+
+          SHOULD_RELEASE=true
+          CREATE_TAG=false
+          VERSION=""
+
+          if [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+            # Path 1: tag push. The tag is the version.
+            VERSION="${REF_NAME#v}"
+
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # Path 2: manual dispatch. Explicit version wins; otherwise bump.
+            if [ -n "${INPUT_VERSION:-}" ]; then
+              VERSION="$INPUT_VERSION"
+            else
+              LATEST="$(latest_semver_tag || true)"
+              BASE="${LATEST#v}"
+              BASE="${BASE:-0.0.0}"
+              VERSION="$(bump_version "$BASE" "${INPUT_BUMP:-patch}")"
+            fi
+            CREATE_TAG=true
+
+          elif [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "branch" ]; then
+            # Path 3: master push. Opt-in via [release] / [release:kind] in head commit.
+            if printf '%s' "$HEAD_MSG" | grep -qiE '\[release(:(patch|minor|major))?\]'; then
+              KIND="$(printf '%s' "$HEAD_MSG" \
+                | grep -oiE '\[release:(patch|minor|major)\]' \
+                | head -1 \
+                | sed -E 's/.*:([a-z]+)\]/\1/' \
+                | tr '[:upper:]' '[:lower:]' || true)"
+              KIND="${KIND:-patch}"
+              LATEST="$(latest_semver_tag || true)"
+              BASE="${LATEST#v}"
+              BASE="${BASE:-0.0.0}"
+              VERSION="$(bump_version "$BASE" "$KIND")"
+              CREATE_TAG=true
+              echo "ℹ️ Auto-release requested via commit trailer (kind=$KIND)."
+            else
+              echo "ℹ️ No [release] trailer in head commit. Skipping release."
+              SHOULD_RELEASE=false
+            fi
+
+          else
+            echo "::error::Unsupported trigger ($EVENT_NAME / $REF_TYPE)."
             exit 1
           fi
 
-      - name: Determine release packaging mode
-        id: release_mode
-        run: |
-          have_cert_secrets=false
-          have_notary_credentials=false
-
-          if [ -n "${DEVELOPER_ID_CERT_BASE64:-}" ] && [ -n "${DEVELOPER_ID_CERT_PASSWORD:-}" ]; then
-            have_cert_secrets=true
-          elif [ -n "${DEVELOPER_ID_CERT_BASE64:-}" ] || [ -n "${DEVELOPER_ID_CERT_PASSWORD:-}" ]; then
-            echo "::warning::Developer ID certificate secrets are only partially configured. Falling back to the unsigned release path."
-          fi
-
-          if [ -n "${WHISP_APPLE_ID:-}" ] && [ -n "${WHISP_APPLE_PASSWORD:-}" ] && [ -n "${WHISP_TEAM_ID:-}" ]; then
-            have_notary_credentials=true
-          elif [ -n "${WHISP_APPLE_ID:-}" ] || [ -n "${WHISP_APPLE_PASSWORD:-}" ] || [ -n "${WHISP_TEAM_ID:-}" ]; then
-            echo "::warning::Apple notarization secrets are only partially configured. Falling back to a non-notarized release."
-          fi
-
-          if [ "$have_cert_secrets" = true ] && [ "$have_notary_credentials" = true ]; then
-            mode=notarized
-            use_developer_id=true
-            include_zip=false
-            echo "✅ Release mode: notarized DMG"
-          elif [ "$have_cert_secrets" = true ]; then
-            mode=signed
-            use_developer_id=true
-            include_zip=true
-            echo "::warning::Apple notarization credentials are missing. Publishing a Developer ID signed but unnotarized release."
-          else
-            mode=adhoc
-            use_developer_id=false
-            include_zip=true
-            if [ "$have_notary_credentials" = true ]; then
-              echo "::warning::Apple notarization credentials are present, but the Developer ID certificate secrets are missing. Publishing an ad-hoc signed release instead."
-            else
-              echo "::warning::No Apple release credentials are configured. Publishing an ad-hoc signed release."
+          if [ "$SHOULD_RELEASE" = "true" ]; then
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Invalid version '$VERSION'. Expected x.y.z."
+              exit 1
             fi
+            TAG="v$VERSION"
+            echo "version=$VERSION"        >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG"                >> "$GITHUB_OUTPUT"
+            echo "create_tag=$CREATE_TAG"  >> "$GITHUB_OUTPUT"
+            echo "WHISP_VERSION=$VERSION"  >> "$GITHUB_ENV"
+            echo "🚀 Release $TAG (create_tag=$CREATE_TAG)"
+          fi
+          echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: ${{ steps.v.outputs.should_release == 'true' && steps.v.outputs.create_tag == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.v.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Pick a new version or delete the existing release first."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "ℹ️ Tag $TAG already exists on origin; reusing it."
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Whisp $TAG"
+            git push origin "$TAG"
+            echo "✅ Pushed tag $TAG"
           fi
 
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "use_developer_id=$use_developer_id" >> "$GITHUB_OUTPUT"
+      - name: Determine release packaging mode
+        id: mode
+        if: ${{ steps.v.outputs.should_release == 'true' }}
+        run: |
+          set -euo pipefail
+          have_cert=false
+          have_notary=false
+          if [ -n "${DEVELOPER_ID_CERT_BASE64:-}" ] && [ -n "${DEVELOPER_ID_CERT_PASSWORD:-}" ]; then
+            have_cert=true
+          fi
+          if [ -n "${WHISP_APPLE_ID:-}" ] && [ -n "${WHISP_APPLE_PASSWORD:-}" ] && [ -n "${WHISP_TEAM_ID:-}" ]; then
+            have_notary=true
+          fi
+          if [ "$have_cert" = true ] && [ "$have_notary" = true ]; then
+            mode=notarized; use_dev_id=true;  include_zip=false
+          elif [ "$have_cert" = true ]; then
+            mode=signed;    use_dev_id=true;  include_zip=true
+            echo "::warning::No notarization credentials; publishing Developer ID signed but unnotarized release."
+          else
+            mode=adhoc;     use_dev_id=false; include_zip=true
+            echo "::warning::No Developer ID certificate; publishing ad-hoc signed release."
+          fi
+          echo "mode=$mode"               >> "$GITHUB_OUTPUT"
+          echo "use_dev_id=$use_dev_id"   >> "$GITHUB_OUTPUT"
           echo "include_zip=$include_zip" >> "$GITHUB_OUTPUT"
+          echo "✅ Release mode: $mode"
 
       - name: Import Developer ID certificate
-        if: ${{ steps.release_mode.outputs.use_developer_id == 'true' }}
+        if: ${{ steps.v.outputs.should_release == 'true' && steps.mode.outputs.use_dev_id == 'true' }}
         run: |
+          set -euo pipefail
           CERT_PATH="$RUNNER_TEMP/dev-id-cert.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
 
-          # Decode certificate
           echo "$DEVELOPER_ID_CERT_BASE64" | base64 -D > "$CERT_PATH"
-
-          # Create and configure temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$DEVELOPER_ID_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | tr -d '"')
 
-          # Import certificate
-          security import "$CERT_PATH" \
-            -P "$DEVELOPER_ID_CERT_PASSWORD" \
-            -A -t cert -f pkcs12 \
-            -k "$KEYCHAIN_PATH"
-
-          # Allow codesign to access the key without UI prompt
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Add temporary keychain to search list
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
-
-          # Verify identity is available
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | awk '{print $2}')
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep "Developer ID Application" | head -1 | awk '{print $2}')
           if [ -z "$IDENTITY" ]; then
-            echo "❌ Developer ID Application certificate not found in keychain"
+            echo "::error::Developer ID Application certificate not found in keychain"
             exit 1
           fi
-          echo "SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "SIGNING_IDENTITY=$IDENTITY"      >> "$GITHUB_ENV"
           echo "BUILD_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "✅ Developer ID certificate imported: $IDENTITY"
-
-      - name: Resolve release version
-        id: release_version
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INPUT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version ||
-            '' }}
-          BUMP_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.bump ||
-            'patch' }}
-        run: |
-          version_gt() {
-            local left="$1"
-            local right="$2"
-            local left_major left_minor left_patch right_major right_minor right_patch
-
-            IFS='.' read -r left_major left_minor left_patch <<< "$left"
-            IFS='.' read -r right_major right_minor right_patch <<< "$right"
-
-            for pair in \
-              "${left_major:-0} ${right_major:-0}" \
-              "${left_minor:-0} ${right_minor:-0}" \
-              "${left_patch:-0} ${right_patch:-0}"; do
-              set -- $pair
-              if ((10#$1 > 10#$2)); then
-                return 0
-              fi
-              if ((10#$1 < 10#$2)); then
-                return 1
-              fi
-            done
-
-            return 1
-          }
-
-          version_lt() {
-            version_gt "$2" "$1"
-          }
-
-          FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
-          LATEST_TAG="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)"
-          BASE_VERSION="$FILE_VERSION"
-          CURRENT_COMMIT="$(git rev-parse HEAD)"
-          SEMVER_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$'
-          LATEST_TAG_VERSION=""
-
-          if [ -n "$LATEST_TAG" ]; then
-            LATEST_TAG_VERSION="${LATEST_TAG#v}"
-            if ! [[ "$LATEST_TAG_VERSION" =~ $SEMVER_REGEX ]]; then
-              echo "❌ Latest release tag $LATEST_TAG is not a supported semantic version"
-              exit 1
-            fi
-            if version_gt "$LATEST_TAG_VERSION" "$BASE_VERSION"; then
-              BASE_VERSION="$LATEST_TAG_VERSION"
-            fi
-          fi
-
-          if [ -n "$INPUT_VERSION" ]; then
-            if ! [[ "$INPUT_VERSION" =~ $SEMVER_REGEX ]]; then
-              echo "❌ version input must use x.y.z format"
-              exit 1
-            fi
-            if version_lt "$INPUT_VERSION" "$BASE_VERSION"; then
-              echo "❌ version input $INPUT_VERSION is older than current source/release version $BASE_VERSION"
-              exit 1
-            fi
-            VERSION="$INPUT_VERSION"
-          elif [ -n "$LATEST_TAG_VERSION" ] && version_gt "$FILE_VERSION" "$LATEST_TAG_VERSION"; then
-            VERSION="$FILE_VERSION"
-            echo "ℹ️ VERSION already leads the latest tag. Reusing pending source version $VERSION."
-          else
-            if ! [[ "$BASE_VERSION" =~ $SEMVER_REGEX ]]; then
-              echo "❌ Cannot derive a semantic version from VERSION=$FILE_VERSION and latest tag=${LATEST_TAG:-none}"
-              exit 1
-            fi
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-            case "$BUMP_TYPE" in
-              major)
-                VERSION="$((MAJOR + 1)).0.0"
-                ;;
-              minor)
-                VERSION="$MAJOR.$((MINOR + 1)).0"
-                ;;
-              patch)
-                VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-                ;;
-              *)
-                echo "❌ Unsupported bump type: $BUMP_TYPE"
-                exit 1
-                ;;
-            esac
-          fi
-
-          TAG="v$VERSION"
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "❌ Release $TAG already exists. Choose a newer version or different bump type."
-            exit 1
-          fi
-
-          if git tag -l "$TAG" | grep -q "$TAG"; then
-            TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
-            if [ "$FILE_VERSION" != "$VERSION" ]; then
-              echo "❌ Tag $TAG already exists, but VERSION is still $FILE_VERSION. Update VERSION in source to resume that release."
-              exit 1
-            fi
-            if [ "$TAG_COMMIT" != "$CURRENT_COMMIT" ]; then
-              echo "❌ Tag $TAG already exists at $TAG_COMMIT, but HEAD is $CURRENT_COMMIT."
-              exit 1
-            fi
-            echo "ℹ️ Tag $TAG already exists without a GitHub release. Resuming release publish."
-          fi
-
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "source_version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "🚀 Prepared release $TAG"
+          echo "✅ Imported Developer ID: $IDENTITY"
 
       - name: Run tests
+        if: ${{ steps.v.outputs.should_release == 'true' }}
         run: swift test
 
-      - name: Require Developer ID certificate
-        if: ${{ steps.release_mode.outputs.use_developer_id == 'true' }}
-        run: |
-          if [ -z "${SIGNING_IDENTITY:-}" ]; then
-            echo "❌ Release workflow requires a Developer ID Application certificate"
-            echo "   Configure DEVELOPER_ID_CERT_BASE64 and DEVELOPER_ID_CERT_PASSWORD secrets."
-            exit 1
-          fi
-          echo "✅ Using Developer ID certificate: $SIGNING_IDENTITY"
-
       - name: Build release app bundles
+        if: ${{ steps.v.outputs.should_release == 'true' }}
         run: |
-          case "${{ steps.release_mode.outputs.mode }}" in
+          set -euo pipefail
+          case "${{ steps.mode.outputs.mode }}" in
             notarized)
-              WHISP_VERSION="${{ steps.release_version.outputs.version }}" \
-              CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
-              ./scripts/build.sh --notarize
+              CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" ./scripts/build.sh --notarize
               ;;
             signed)
-              WHISP_VERSION="${{ steps.release_version.outputs.version }}" \
-              CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
-              ./scripts/build.sh
+              CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" ./scripts/build.sh
               ;;
             adhoc)
-              WHISP_VERSION="${{ steps.release_version.outputs.version }}" \
               ./scripts/build.sh
-              ;;
-            *)
-              echo "❌ Unknown release mode: ${{ steps.release_mode.outputs.mode }}"
-              exit 1
               ;;
           esac
 
       - name: Create release DMG
+        if: ${{ steps.v.outputs.should_release == 'true' }}
         run: |
-          if [ "${{ steps.release_mode.outputs.mode }}" = "notarized" ]; then
-            WHISP_VERSION="${{ steps.release_version.outputs.version }}" \
+          set -euo pipefail
+          if [ "${{ steps.mode.outputs.mode }}" = "notarized" ]; then
             ./scripts/create-dmg.sh --notarize
           else
-            WHISP_VERSION="${{ steps.release_version.outputs.version }}" \
             ./scripts/create-dmg.sh
           fi
 
       - name: Create fallback app zip
-        if: ${{ steps.release_mode.outputs.include_zip == 'true' }}
-        run: |
-          ditto -c -k --keepParent "Whisp.app" "Whisp-${{ steps.release_version.outputs.version }}.zip"
+        if: ${{ steps.v.outputs.should_release == 'true' && steps.mode.outputs.include_zip == 'true' }}
+        run: ditto -c -k --keepParent "Whisp.app" "Whisp-${{ steps.v.outputs.version }}.zip"
 
       - name: Create checksum
+        if: ${{ steps.v.outputs.should_release == 'true' }}
         run: |
-          shasum -a 256 "Whisp-${{ steps.release_version.outputs.version }}.dmg" \
-            > "Whisp-${{ steps.release_version.outputs.version }}.dmg.sha256"
+          shasum -a 256 "Whisp-${{ steps.v.outputs.version }}.dmg" \
+            > "Whisp-${{ steps.v.outputs.version }}.dmg.sha256"
 
-      - name: Commit release version
-        id: commit_release_version
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          TARGET_VERSION="${{ steps.release_version.outputs.version }}"
-          FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
-          CURRENT_COMMIT="$(git rev-parse HEAD)"
-          REMOTE_HEAD="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk '{print $1}')"
-          SHOULD_PUBLISH=true
-
-          if [ -n "$REMOTE_HEAD" ] && [ "$REMOTE_HEAD" != "$CURRENT_COMMIT" ]; then
-            if [ "$EVENT_NAME" = "push" ]; then
-              echo "ℹ️ origin/$GITHUB_REF_NAME advanced during this run. Skipping publish because a newer push-triggered release run should ship the latest master commit."
-              SHOULD_PUBLISH=false
-            else
-              echo "❌ origin/$GITHUB_REF_NAME advanced during this run. Re-run the release workflow from the latest master commit."
-              exit 1
-            fi
-          fi
-
-          if [ "$SHOULD_PUBLISH" = "true" ] && [ "$FILE_VERSION" != "$TARGET_VERSION" ]; then
-            printf '%s\n' "$TARGET_VERSION" > VERSION
-
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add VERSION
-            git commit -m "chore: bump VERSION to $TARGET_VERSION for release"
-            git push origin "HEAD:$GITHUB_REF_NAME"
-
-            CURRENT_COMMIT="$(git rev-parse HEAD)"
-            echo "✅ Bumped VERSION to $TARGET_VERSION in commit $CURRENT_COMMIT"
-          elif [ "$SHOULD_PUBLISH" = "true" ]; then
-            echo "ℹ️ VERSION already set to $TARGET_VERSION"
-          fi
-
-          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
-          if [ "$SHOULD_PUBLISH" = "true" ]; then
-            echo "commit_sha=$CURRENT_COMMIT" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create tag and GitHub Release
-        if: ${{ steps.commit_release_version.outputs.should_publish == 'true' }}
+      - name: Generate release notes
+        id: notes
+        if: ${{ steps.v.outputs.should_release == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v$VERSION"
-          if ! git tag -l "$TAG" | grep -q "$TAG"; then
-            git tag "$TAG" "${{ steps.commit_release_version.outputs.commit_sha }}"
-          fi
-          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            git push origin "$TAG"
-          fi
+          set -euo pipefail
+          TAG="${{ steps.v.outputs.tag }}"
+          MODE="${{ steps.mode.outputs.mode }}"
+          NOTES=/tmp/release-notes.md
 
-           cat > /tmp/release-notes.md <<'NOTES'
+          cat > "$NOTES" <<'HEADER'
           ## Installation
 
           1. Download the `.dmg` file below and drag **Whisp.app** into `/Applications/`.
           2. The DMG also includes **Uninstall Whisp.app** if you want a full cleanup later.
+          HEADER
 
-          NOTES
-
-           case "${{ steps.release_mode.outputs.mode }}" in
+          case "$MODE" in
             notarized)
-              cat >> /tmp/release-notes.md <<'NOTES'
-           3. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
+              cat >> "$NOTES" <<'BODY'
+          3. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
              - **Microphone** — for voice recording
              - **Accessibility** — for Smart Paste
              - **Input Monitoring** — for the global hotkey
-
-           NOTES
+          BODY
               ;;
-            signed)
-              cat >> /tmp/release-notes.md <<'NOTES'
-           3. This build is signed with a Developer ID certificate but is not notarized. If macOS blocks it on first launch, run this once:
+            signed|adhoc)
+              cat >> "$NOTES" <<'BODY'
+          3. This build is not notarized. If macOS blocks it on first launch, run this once:
              ```bash
              sudo xattr -cr /Applications/Whisp.app
              ```
-           4. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
+          4. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
              - **Microphone** — for voice recording
              - **Accessibility** — for Smart Paste
              - **Input Monitoring** — for the global hotkey
 
-           > You only need to run the `xattr` command once per download. Permissions persist across app restarts.
-
-           NOTES
+          > You only need to run the `xattr` command once per download. Permissions persist across app restarts.
+          BODY
               ;;
-            adhoc)
-              cat >> /tmp/release-notes.md <<'NOTES'
-           3. Whisp is open-source and this build is not notarized. If macOS blocks it on first launch, run this once:
-             ```bash
-             sudo xattr -cr /Applications/Whisp.app
-             ```
-           4. Open Whisp from `/Applications/`. On first launch, grant the requested permissions:
-             - **Microphone** — for voice recording
-             - **Accessibility** — for Smart Paste
-             - **Input Monitoring** — for the global hotkey
+          esac
 
-           > You only need to run the `xattr` command once per download. Permissions persist across app restarts.
-
-           NOTES
-              ;;
-            *)
-              echo "❌ Unknown release mode: ${{ steps.release_mode.outputs.mode }}"
-              exit 1
-              ;;
-           esac
-
-          # Append auto-generated changelog
-          PREV_TAG="$(git tag --sort=-v:refname | grep -v "^$TAG$" | head -1 || true)"
+          PREV_TAG="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+            | grep -v "^${TAG}$" | head -1 || true)"
           if [ -n "$PREV_TAG" ]; then
-            echo -e "\n## What's Changed\n" >> /tmp/release-notes.md
-            gh api repos/${{ github.repository }}/compare/${PREV_TAG}...${TAG} \
+            {
+              echo ""
+              echo "## What's Changed"
+              echo ""
+            } >> "$NOTES"
+            gh api "repos/${{ github.repository }}/compare/${PREV_TAG}...${TAG}" \
               --jq '.commits[] | "- " + (.commit.message | split("\n")[0]) + " (" + (.sha[:7]) + ")"' \
-              >> /tmp/release-notes.md 2>/dev/null || true
+              >> "$NOTES" 2>/dev/null || true
           fi
 
-          release_assets=(
-            "Whisp-${{ steps.release_version.outputs.version }}.dmg"
-            "Whisp-${{ steps.release_version.outputs.version }}.dmg.sha256"
-          )
+          echo "path=$NOTES" >> "$GITHUB_OUTPUT"
+          echo "--- release notes ---"
+          cat "$NOTES"
+          echo "---------------------"
 
-          if [ "${{ steps.release_mode.outputs.include_zip }}" = "true" ]; then
-            release_assets+=("Whisp-${{ steps.release_version.outputs.version }}.zip")
-          fi
-
-          gh release create "$TAG" \
-            "${release_assets[@]}" \
-            --verify-tag \
-            --target "${{ steps.commit_release_version.outputs.commit_sha }}" \
-            --title "Whisp ${{ steps.release_version.outputs.version }}" \
-            --notes-file /tmp/release-notes.md
+      - name: Publish GitHub Release
+        if: ${{ steps.v.outputs.should_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          name: Whisp ${{ steps.v.outputs.version }}
+          body_path: ${{ steps.notes.outputs.path }}
+          draft: false
+          prerelease: false
+          # zip is only produced in signed/adhoc modes; allow it to be missing.
+          fail_on_unmatched_files: false
+          files: |
+            Whisp-${{ steps.v.outputs.version }}.dmg
+            Whisp-${{ steps.v.outputs.version }}.dmg.sha256
+            Whisp-${{ steps.v.outputs.version }}.zip

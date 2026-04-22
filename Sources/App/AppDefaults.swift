@@ -15,6 +15,7 @@ internal enum AppDefaults {
 
         static let semanticCorrectionMode = "semanticCorrectionMode"
         static let semanticCorrectionModelRepo = "semanticCorrectionModelRepo"
+        static let personalDictionaryEnabled = "personalDictionaryEnabled"
 
         static let startAtLogin = "startAtLogin"
         static let floatingMicrophoneDockEnabled = "floatingMicrophoneDockEnabled"
@@ -67,6 +68,7 @@ internal enum AppDefaults {
 
             Keys.semanticCorrectionMode: defaultSemanticCorrectionMode.rawValue,
             Keys.semanticCorrectionModelRepo: defaultSemanticCorrectionModelRepo,
+            Keys.personalDictionaryEnabled: true,
 
             Keys.startAtLogin: true,
             Keys.floatingMicrophoneDockEnabled: true,

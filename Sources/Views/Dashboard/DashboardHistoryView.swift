@@ -44,7 +44,7 @@ internal struct DashboardHistoryView: View {
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Image(systemName: "text.book.closed")
+            Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 40, weight: .ultraLight))
                 .foregroundStyle(.quaternary)
             Text("No transcriptions yet")
@@ -71,7 +71,7 @@ internal struct DashboardHistoryView: View {
                             .font(.caption2)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.1))
+                            .background(DashboardTheme.brandMuted)
                             .clipShape(Capsule())
                     }
                 }
@@ -106,7 +106,7 @@ internal struct DashboardHistoryView: View {
                         copyText(record.text, recordID: record.id)
                     } label: {
                         Image(systemName: copiedRecordID == record.id ? "checkmark" : "doc.on.doc")
-                            .foregroundStyle(copiedRecordID == record.id ? .green : .secondary)
+                            .foregroundStyle(copiedRecordID == record.id ? DashboardTheme.success : Color.secondary)
                             .contentTransition(.symbolEffect(.replace))
                     }
                     .buttonStyle(.plain)
@@ -116,6 +116,8 @@ internal struct DashboardHistoryView: View {
             .padding(.vertical, 4)
         }
         .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        .background(DashboardTheme.pageBg)
     }
 
     private func loadRecords() async {

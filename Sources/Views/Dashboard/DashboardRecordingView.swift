@@ -5,24 +5,19 @@ import SwiftUI
 internal struct DashboardRecordingView: View {
     @AppStorage(AppDefaults.Keys.selectedMicrophone) private var selectedMicrophone = ""
     @AppStorage(AppDefaults.Keys.pressAndHoldEnabled) private var pressAndHoldEnabled =
-        PressAndHoldConfiguration.defaults
-        .enabled
+        PressAndHoldConfiguration.defaults.enabled
     @AppStorage(AppDefaults.Keys.pressAndHoldKeyIdentifier) private var pressAndHoldKeyIdentifier =
-        PressAndHoldConfiguration
-        .defaults.key.rawValue
-    @AppStorage(AppDefaults.Keys.pressAndHoldMode) private var pressAndHoldModeRaw = PressAndHoldConfiguration
-        .defaults.mode
-        .rawValue
+        PressAndHoldConfiguration.defaults.key.rawValue
+    @AppStorage(AppDefaults.Keys.pressAndHoldMode) private var pressAndHoldModeRaw =
+        PressAndHoldConfiguration.defaults.mode.rawValue
     @AppStorage(AppDefaults.Keys.pressAndHoldFnWarningAcknowledged) private
         var pressAndHoldFnWarningAcknowledged = false
     @AppStorage(AppDefaults.Keys.pressAndHoldFnReadiness) private var pressAndHoldFnReadinessRaw =
-        FnGlobeHotkeyReadiness
-        .requiresAcknowledgement.rawValue
+        FnGlobeHotkeyReadiness.requiresAcknowledgement.rawValue
     @AppStorage(AppDefaults.Keys.pressAndHoldFnFailureMessage) private var pressAndHoldFnFailureMessage = ""
     @AppStorage(AppDefaults.Keys.pressAndHoldModifierReadiness) private
         var pressAndHoldModifierReadinessRaw =
-        PressAndHoldHotkeyReadiness
-        .requiresInputMonitoring.rawValue
+        PressAndHoldHotkeyReadiness.requiresInputMonitoring.rawValue
     @AppStorage(AppDefaults.Keys.pressAndHoldModifierFailureMessage) private
         var pressAndHoldModifierFailureMessage = ""
 
@@ -34,79 +29,21 @@ internal struct DashboardRecordingView: View {
     private let microphoneVolumeManager = MicrophoneVolumeManager.shared
 
     var body: some View {
-        Form {
-            Section {
-                if availableMicrophones.isEmpty {
-                    Text("No microphones detected. Plug in a microphone or check system permissions.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    Picker("Input Device", selection: $selectedMicrophone) {
-                        Text("System Default").tag("")
-                        ForEach(availableMicrophones, id: \.uid) { device in
-                            Text(device.name).tag(device.uid)
-                        }
-                    }
-                    .pickerStyle(.menu)
+        ScrollView {
+            VStack(alignment: .leading, spacing: DashboardTheme.Spacing.lg) {
+                microphoneSection
+                pressAndHoldSection
 
-                    Text(
-                        "Leave this on System Default to follow macOS. Choose a microphone here to force Whisp to record from that device."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Microphone")
-            }
-
-            Section {
-                Toggle(isOn: $pressAndHoldEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Enable Press & Hold")
-                        Text("Hold a modifier key to control recording.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .onChange(of: pressAndHoldEnabled) { _, _ in
-                    publishPressAndHoldConfiguration()
-                }
-
-                if pressAndHoldEnabled {
-                    Picker("Behavior", selection: $pressAndHoldModeRaw) {
-                        ForEach(PressAndHoldMode.allCases, id: \.rawValue) { mode in
-                            Text(mode.displayName).tag(mode.rawValue)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .onChange(of: pressAndHoldModeRaw) { _, _ in
-                        publishPressAndHoldConfiguration()
-                    }
-
-                    Picker("Key", selection: $pressAndHoldKeyIdentifier) {
-                        ForEach(PressAndHoldKey.allCases, id: \.rawValue) { key in
-                            Text(key.displayName).tag(key.rawValue)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .onChange(of: pressAndHoldKeyIdentifier) { oldValue, newValue in
-                        handlePressAndHoldKeyChange(from: oldValue, to: newValue)
-                    }
-
-                    if isFnGlobeSelected {
-                        fnGlobeSetupSection
-                    } else if pressAndHoldEnabled {
-                        modifierKeySetupSection
-                    }
-                }
-            } header: {
-                Text("Press & Hold")
-            } footer: {
                 Text(
                     "Hotkeys are optional. You can also start recording from the floating dock. Some keys require extra permissions — see the Access tab."
                 )
+                .font(.system(size: 11))
+                .foregroundStyle(DashboardTheme.inkMuted)
+                .padding(.horizontal, 2)
             }
+            .padding(DashboardTheme.Spacing.lg)
         }
-        .formStyle(.grouped)
+        .background(DashboardTheme.pageBg)
         .onAppear {
             loadMicrophones()
             syncPressAndHoldConfiguration()
@@ -126,6 +63,96 @@ internal struct DashboardRecordingView: View {
             Text(
                 "Fn / Globe requires extra setup:\n\n1. Grant Input Monitoring permission.\n2. In System Settings > Keyboard, set Press Globe key to Do Nothing.\n3. If it still does not work, quit and reopen Whisp."
             )
+        }
+    }
+
+    private var microphoneSection: some View {
+        SettingsSectionCard(title: "Microphone", icon: "mic") {
+            if availableMicrophones.isEmpty {
+                Text(
+                    "No microphones detected. Plug in a microphone or check system permissions."
+                )
+                .font(.system(size: 13))
+                .foregroundStyle(DashboardTheme.inkMuted)
+                .padding(.horizontal, DashboardTheme.Spacing.md)
+                .padding(.vertical, 12)
+            } else {
+                SettingsPickerRow(
+                    title: "Input Device",
+                    selection: $selectedMicrophone,
+                    options: [""] + availableMicrophones.map { $0.uid },
+                    display: { uid in
+                        uid.isEmpty
+                            ? "System Default"
+                            : availableMicrophones.first(where: { $0.uid == uid })?.name ?? uid
+                    }
+                )
+
+                SettingsDivider()
+
+                Text(
+                    "Leave on System Default to follow macOS. Choose a specific microphone to force Whisp to use that device."
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(DashboardTheme.inkMuted)
+                .padding(.horizontal, DashboardTheme.Spacing.md)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private var pressAndHoldSection: some View {
+        SettingsSectionCard(title: "Press & Hold", icon: "keyboard") {
+            SettingsToggleRow(
+                title: "Enable Press & Hold",
+                subtitle: "Hold a modifier key to control recording",
+                isOn: $pressAndHoldEnabled
+            )
+            .onChange(of: pressAndHoldEnabled) { _, _ in
+                publishPressAndHoldConfiguration()
+            }
+
+            if pressAndHoldEnabled {
+                SettingsDivider()
+
+                SettingsPickerRow(
+                    title: "Behavior",
+                    selection: $pressAndHoldModeRaw,
+                    options: PressAndHoldMode.allCases.map { $0.rawValue },
+                    display: { rawValue in
+                        PressAndHoldMode(rawValue: rawValue)?.displayName ?? rawValue
+                    }
+                )
+                .onChange(of: pressAndHoldModeRaw) { _, _ in
+                    publishPressAndHoldConfiguration()
+                }
+
+                SettingsDivider()
+
+                SettingsPickerRow(
+                    title: "Key",
+                    selection: $pressAndHoldKeyIdentifier,
+                    options: PressAndHoldKey.allCases.map { $0.rawValue },
+                    display: { rawValue in
+                        PressAndHoldKey(rawValue: rawValue)?.displayName ?? rawValue
+                    }
+                )
+                .onChange(of: pressAndHoldKeyIdentifier) { oldValue, newValue in
+                    handlePressAndHoldKeyChange(from: oldValue, to: newValue)
+                }
+
+                if isFnGlobeSelected {
+                    SettingsDivider()
+                    fnGlobeSetupSection
+                        .padding(.horizontal, DashboardTheme.Spacing.md)
+                        .padding(.vertical, DashboardTheme.Spacing.sm)
+                } else {
+                    SettingsDivider()
+                    modifierKeySetupSection
+                        .padding(.horizontal, DashboardTheme.Spacing.md)
+                        .padding(.vertical, DashboardTheme.Spacing.sm)
+                }
+            }
         }
     }
 
@@ -165,7 +192,6 @@ internal struct DashboardRecordingView: View {
                 }
             }
         }
-        .padding(.top, 4)
     }
 
     @ViewBuilder
@@ -201,7 +227,6 @@ internal struct DashboardRecordingView: View {
                 }
             }
         }
-        .padding(.top, 4)
     }
 
     private var selectedPressAndHoldKey: PressAndHoldKey {
@@ -262,8 +287,6 @@ internal struct DashboardRecordingView: View {
             return false
         }
     }
-
-    // MARK: - Modifier Key Readiness
 
     private var modifierKeyReadiness: PressAndHoldHotkeyReadiness {
         PressAndHoldHotkeyReadiness(rawValue: pressAndHoldModifierReadinessRaw)
@@ -357,7 +380,6 @@ internal struct DashboardRecordingView: View {
     }
 
     private func syncPressAndHoldConfiguration(_ configuration: PressAndHoldConfiguration) {
-
         if pressAndHoldEnabled != configuration.enabled {
             pressAndHoldEnabled = configuration.enabled
         }
@@ -372,7 +394,6 @@ internal struct DashboardRecordingView: View {
             pressAndHoldModeRaw = configuration.mode.rawValue
         }
     }
-
 }
 
 #Preview {

@@ -71,56 +71,59 @@ internal struct DashboardProvidersView: View {
     let keychainService: KeychainServiceProtocol = KeychainService.shared
 
     var body: some View {
-        Form {
-            Section {
-                engineSection
-            } header: {
-                Text("Engine")
-            } footer: {
-                Text(engineConfig(for: transcriptionProvider).tagline)
-            }
-
-            if transcriptionProvider == .openai || transcriptionProvider == .gemini {
-                Section("API Credentials") {
-                    credentialsSection
+        ScrollView {
+            VStack(alignment: .leading, spacing: DashboardTheme.Spacing.lg) {
+                SettingsSectionCard(title: "Engine", icon: "waveform.circle") {
+                    engineSection
                 }
-            }
 
-            if transcriptionProvider == .parakeet {
-                Section("Parakeet Setup") {
-                    parakeetCard
+                if transcriptionProvider == .openai || transcriptionProvider == .gemini {
+                    SettingsSectionCard(title: "API Credentials", icon: "key") {
+                        credentialsSection
+                    }
                 }
-            }
 
-            if transcriptionProvider == .gemma {
-                Section("Gemma Setup") {
-                    gemmaCard
+                if transcriptionProvider == .parakeet {
+                    SettingsSectionCard(title: "Parakeet Setup", icon: "bird") {
+                        VStack(spacing: 10) { parakeetCard }
+                            .padding(DashboardTheme.Spacing.md)
+                    }
                 }
-            }
 
-            if transcriptionProvider == .whisperMLX {
-                Section("Whisper MLX Setup") {
-                    whisperMLXCard
+                if transcriptionProvider == .gemma {
+                    SettingsSectionCard(title: "Gemma Setup", icon: "cpu") {
+                        VStack(spacing: 10) { gemmaCard }
+                            .padding(DashboardTheme.Spacing.md)
+                    }
                 }
-            }
 
-            if transcriptionProvider == .local {
-                Section("Local Models") {
-                    localWhisperCard
+                if transcriptionProvider == .whisperMLX {
+                    SettingsSectionCard(title: "Whisper MLX Setup", icon: "waveform") {
+                        VStack(spacing: 10) { whisperMLXCard }
+                            .padding(DashboardTheme.Spacing.md)
+                    }
                 }
-            }
 
-            Section {
-                correctionSection
-            } header: {
-                Text("Semantic Correction")
-            } footer: {
+                if transcriptionProvider == .local {
+                    SettingsSectionCard(title: "Local Models", icon: "laptopcomputer") {
+                        localWhisperCard
+                    }
+                }
+
+                SettingsSectionCard(title: "Semantic Correction", icon: "wand.and.stars") {
+                    correctionSection
+                }
+
                 Text(
                     "Clean up grammar, punctuation, and filler words after transcription. Manage preferred spellings in Dictionary."
                 )
+                .font(.system(size: 11))
+                .foregroundStyle(DashboardTheme.inkMuted)
+                .padding(.horizontal, 2)
             }
+            .padding(DashboardTheme.Spacing.lg)
         }
-        .formStyle(.grouped)
+        .background(DashboardTheme.pageBg)
         .confirmationDialog(
             "Delete \(mlxRepoToDelete?.split(separator: "/").last.map(String.init) ?? "model")?",
             isPresented: $showMLXDeleteConfirm,
@@ -151,6 +154,9 @@ internal struct DashboardProvidersView: View {
                 onStart: {}
             )
         }
+        .sheet(isPresented: $showMLXModelsSheet) {
+            MLXModelsSheet(selectedModelRepo: $semanticCorrectionModelRepo)
+        }
         .onAppear {
             loadAPIKeys()
             loadModelStates()
@@ -168,24 +174,30 @@ internal struct DashboardProvidersView: View {
         let mode = SemanticCorrectionMode(rawValue: semanticCorrectionModeRaw) ?? .off
 
         return Group {
-            Picker("Mode", selection: $semanticCorrectionModeRaw) {
-                ForEach(SemanticCorrectionMode.allCases, id: \.self) { mode in
-                    Text(mode.displayName).tag(mode.rawValue)
-                }
-            }
-            .pickerStyle(.menu)
+            SettingsPickerRow(
+                title: "Mode",
+                selection: $semanticCorrectionModeRaw,
+                options: SemanticCorrectionMode.allCases.map { $0.rawValue },
+                display: { SemanticCorrectionMode(rawValue: $0)?.displayName ?? $0 }
+            )
 
             switch mode {
             case .off:
                 EmptyView()
             case .localMLX:
-                correctionMLXSection
+                Group {
+                    SettingsDivider()
+                    VStack(spacing: 10) { correctionMLXSection }
+                        .padding(DashboardTheme.Spacing.md)
+                }
             case .cloud:
-                correctionCloudInfo
+                Group {
+                    SettingsDivider()
+                    correctionCloudInfo
+                        .padding(.horizontal, DashboardTheme.Spacing.md)
+                        .padding(.vertical, 10)
+                }
             }
-        }
-        .sheet(isPresented: $showMLXModelsSheet) {
-            MLXModelsSheet(selectedModelRepo: $semanticCorrectionModelRepo)
         }
     }
 
@@ -298,8 +310,8 @@ internal struct DashboardProvidersView: View {
 
     private var correctionCloudInfo: some View {
         Label("Uses your selected cloud provider for post-processing.", systemImage: "cloud")
-            .foregroundStyle(.secondary)
-            .font(.callout)
+            .foregroundStyle(DashboardTheme.inkMuted)
+            .font(.system(size: 13))
     }
 
     private func mlxModelsForPicker() -> [MLXModel] {
@@ -347,19 +359,74 @@ internal struct DashboardProvidersView: View {
 
     // MARK: - Engine Selection
     private var engineSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Picker("", selection: $transcriptionProvider) {
+        VStack(alignment: .leading, spacing: 12) {
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3),
+                spacing: 10
+            ) {
                 ForEach(TranscriptionProvider.allCases, id: \.self) { provider in
-                    Label(provider.displayName, systemImage: providerIcon(for: provider))
-                        .tag(provider)
+                    engineTile(for: provider)
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.radioGroup)
 
             selectedEngineStatus
                 .font(.footnote)
         }
+        .padding(.vertical, 4)
+    }
+
+    private func engineTile(for provider: TranscriptionProvider) -> some View {
+        let isSelected = transcriptionProvider == provider
+        let (_, isReady) = statusInfo(for: provider)
+
+        return Button(action: { transcriptionProvider = provider }) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .top) {
+                    Image(systemName: providerIcon(for: provider))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(
+                            isSelected
+                                ? DashboardTheme.brand : Color(nsColor: .tertiaryLabelColor))
+
+                    Spacer()
+
+                    Circle()
+                        .fill(isReady ? Color(nsColor: .systemGreen) : Color(nsColor: .systemOrange))
+                        .frame(width: 6, height: 6)
+                        .padding(.top, 3)
+                }
+
+                Text(provider.displayName)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(
+                        isSelected
+                            ? Color(nsColor: .labelColor) : Color(nsColor: .secondaryLabelColor))
+                    .lineLimit(1)
+
+                Text(engineConfig(for: provider).tagline)
+                    .font(.system(size: 10))
+                    .foregroundStyle(
+                        isSelected ? DashboardTheme.inkMuted : Color(nsColor: .tertiaryLabelColor))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? DashboardTheme.brandSubtle : Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(
+                        isSelected
+                            ? DashboardTheme.brand.opacity(0.5)
+                            : Color(nsColor: .separatorColor).opacity(0.7),
+                        lineWidth: isSelected ? 1.5 : 0.5
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private struct EngineConfig {

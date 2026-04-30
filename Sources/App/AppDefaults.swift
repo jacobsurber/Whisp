@@ -23,6 +23,9 @@ internal enum AppDefaults {
         static let transcriptionRetentionPeriod = "transcriptionRetentionPeriod"
         static let maxModelStorageGB = "maxModelStorageGB"
         static let enableSmartPaste = "enableSmartPaste"
+        static let showDockIcon = "showDockIcon"
+        static let showMenuBarIcon = "showMenuBarIcon"
+        static let showDockTooltip = "showDockTooltip"
 
         static let pressAndHoldEnabled = "pressAndHoldEnabled"
         static let pressAndHoldKeyIdentifier = "pressAndHoldKeyIdentifier"
@@ -75,6 +78,9 @@ internal enum AppDefaults {
             Keys.transcriptionRetentionPeriod: RetentionPeriod.oneMonth.rawValue,
             Keys.maxModelStorageGB: 5.0,
             Keys.enableSmartPaste: true,
+            Keys.showDockIcon: false,
+            Keys.showMenuBarIcon: true,
+            Keys.showDockTooltip: true,
 
             Keys.pressAndHoldEnabled: PressAndHoldConfiguration.defaults.enabled,
             Keys.pressAndHoldKeyIdentifier: PressAndHoldConfiguration.defaults.key.rawValue,

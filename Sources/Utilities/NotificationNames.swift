@@ -5,6 +5,7 @@ import Foundation
 internal extension Notification.Name {
     // MARK: - Settings and Configuration
     static let pressAndHoldSettingsChanged = Notification.Name("PressAndHoldSettingsChanged")
+    static let iconVisibilityPreferencesChanged = Notification.Name("IconVisibilityPreferencesChanged")
 
     // MARK: - Recording Events
     static let recordingStopped = Notification.Name("RecordingStopped")

@@ -147,7 +147,9 @@ internal final class TranscriptionCoordinator {
             Logger.app.debug("SmartPaste enabled=\(enableSmartPaste)")
             if enableSmartPaste {
                 try? await Task.sleep(for: .milliseconds(100))
-                let didType = pasteManager.typeToActiveApp(text: finalText)
+                // Append a trailing space so consecutive dictations don't run together.
+                let textToType = finalText.hasSuffix(" ") ? finalText : finalText + " "
+                let didType = pasteManager.typeToActiveApp(text: textToType)
                 Logger.app.debug("SmartPaste type result=\(didType)")
 
                 if !didType {

@@ -14,8 +14,21 @@ if [ -n "$existing_line" ]; then
   exit 0
 fi
 
-if ! command -v openssl >/dev/null 2>&1; then
+OPENSSL_BIN="$(command -v openssl || true)"
+for candidate in /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+  if [ -x "$candidate" ]; then
+    OPENSSL_BIN="$candidate"
+    break
+  fi
+done
+
+if [ -z "$OPENSSL_BIN" ]; then
   echo "❌ openssl is required to create a local signing identity"
+  exit 1
+fi
+
+if ! "$OPENSSL_BIN" version 2>&1 | grep -qi '^OpenSSL'; then
+  echo "❌ OpenSSL (not LibreSSL) is required for the -legacy pkcs12 flag. Install via 'brew install openssl@3'."
   exit 1
 fi
 
@@ -49,7 +62,7 @@ authorityKeyIdentifier = keyid,issuer
 EOF
 
 echo "🔐 Creating local Whisp code-signing identity..."
-openssl req \
+"$OPENSSL_BIN" req \
   -newkey rsa:2048 \
   -x509 \
   -nodes \
@@ -58,7 +71,7 @@ openssl req \
   -keyout "$private_key_path" \
   -out "$certificate_path" >/dev/null 2>&1
 
-openssl pkcs12 \
+"$OPENSSL_BIN" pkcs12 \
   -export \
   -legacy \
   -inkey "$private_key_path" \

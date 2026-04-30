@@ -37,11 +37,7 @@ extension AppDelegate {
             await preloadServices()
         }
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem?.button {
-            button.image = AppSetupHelper.createMenuBarIcon()
-        }
-        statusItem?.menu = makeStatusMenu()
+        applyMenuBarIconVisibility()
 
         if let audioRecorder {
             FloatingMicrophoneDockManager.shared.configure(
@@ -74,11 +70,39 @@ extension AppDelegate {
             object: nil
         )
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(iconVisibilityPreferencesChanged),
+            name: .iconVisibilityPreferencesChanged,
+            object: nil
+        )
+
         setupNotificationObservers()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false  // Keep app running in menu bar
+    }
+
+    func applyMenuBarIconVisibility() {
+        let showMenuBarIcon = UserDefaults.standard.bool(forKey: AppDefaults.Keys.showMenuBarIcon)
+
+        if showMenuBarIcon {
+            if statusItem == nil {
+                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+                item.button?.image = AppSetupHelper.createMenuBarIcon()
+                item.menu = makeStatusMenu()
+                statusItem = item
+            }
+        } else if let existing = statusItem {
+            NSStatusBar.system.removeStatusItem(existing)
+            statusItem = nil
+        }
+    }
+
+    @objc func iconVisibilityPreferencesChanged() {
+        AppSetupHelper.applyDockIconVisibility()
+        applyMenuBarIconVisibility()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

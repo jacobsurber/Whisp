@@ -227,6 +227,7 @@ internal struct FloatingMicrophoneDockView: View {
         PressAndHoldConfiguration.defaults.enabled
     @AppStorage(AppDefaults.Keys.pressAndHoldKeyIdentifier) private var pressAndHoldKeyIdentifier =
         PressAndHoldConfiguration.defaults.key.rawValue
+    @AppStorage(AppDefaults.Keys.showDockTooltip) private var showDockTooltip = true
     @State private var isPrimaryButtonHovered = false
 
     let onPrimaryAction: () -> Void
@@ -292,26 +293,28 @@ internal struct FloatingMicrophoneDockView: View {
 
     private var expandedDock: some View {
         VStack(spacing: 8) {
-            Button(action: onSettingsAction) {
-                Text(primaryText)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(text)
-                    .lineLimit(1)
-                    .padding(.horizontal, 18)
-                    .frame(minWidth: 300)
-                    .frame(height: 44)
-                    .background(capsuleBackground)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .onHover { isHovering in
-                isPrimaryButtonHovered = isHovering
+            if showDockTooltip {
+                Button(action: onSettingsAction) {
+                    Text(primaryText)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(text)
+                        .lineLimit(1)
+                        .padding(.horizontal, 18)
+                        .frame(minWidth: 300)
+                        .frame(height: 44)
+                        .background(capsuleBackground)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { isHovering in
+                    isPrimaryButtonHovered = isHovering
+                }
             }
 
             dotsPill
         }
         .overlay(alignment: .top) {
-            if isPrimaryButtonHovered {
+            if isPrimaryButtonHovered && showDockTooltip {
                 primaryTooltip
                     .offset(y: -46)
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))

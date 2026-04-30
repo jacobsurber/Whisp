@@ -1,3 +1,4 @@
+import AVFoundation
 import ServiceManagement
 import SwiftUI
 import os.log
@@ -10,13 +11,33 @@ internal struct DashboardPreferencesView: View {
     @AppStorage(AppDefaults.Keys.enableSmartPaste) private var enableSmartPaste = true
     @AppStorage(AppDefaults.Keys.playCompletionSound) private var playCompletionSound = true
     @AppStorage(AppDefaults.Keys.maxModelStorageGB) private var maxModelStorageGB = 5.0
+    @AppStorage("selectedMicrophone") private var selectedMicrophone = ""
+    @AppStorage(AppDefaults.Keys.showDockIcon) private var showDockIcon = false
+    @AppStorage(AppDefaults.Keys.showMenuBarIcon) private var showMenuBarIcon = true
+    @AppStorage(AppDefaults.Keys.showDockTooltip) private var showDockTooltip = true
 
     @State private var loginItemError: String?
+    @State private var availableMicrophones: [AVCaptureDevice] = []
 
     private let storageOptions: [Double] = [1, 2, 5, 10, 20]
 
     var body: some View {
         Form {
+            Section("Microphone") {
+                if availableMicrophones.isEmpty {
+                    Text("No microphones detected. Plug in a microphone or check system permissions.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Input Device", selection: $selectedMicrophone) {
+                        Text("System Default").tag("")
+                        ForEach(availableMicrophones, id: \.uniqueID) { device in
+                            Text(device.localizedName).tag(device.uniqueID)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+
             Section("General") {
                 Toggle(isOn: $startAtLogin) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -37,6 +58,40 @@ internal struct DashboardPreferencesView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                }
+
+                Toggle(isOn: $showDockTooltip) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Dock Hover Tooltip")
+                        Text("Show a tooltip when hovering the floating pill.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!floatingMicrophoneDockEnabled)
+
+                Toggle(isOn: $showDockIcon) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show Dock Icon")
+                        Text("Display Whisp in the macOS Dock.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: showDockIcon) { _, _ in
+                    NotificationCenter.default.post(name: .iconVisibilityPreferencesChanged, object: nil)
+                }
+
+                Toggle(isOn: $showMenuBarIcon) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show Menu Bar Icon")
+                        Text("Display the Whisp icon in the menu bar.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: showMenuBarIcon) { _, _ in
+                    NotificationCenter.default.post(name: .iconVisibilityPreferencesChanged, object: nil)
                 }
 
                 Toggle(isOn: $autoBoostMicrophoneVolume) {
@@ -108,6 +163,18 @@ internal struct DashboardPreferencesView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            loadMicrophones()
+        }
+    }
+
+    private func loadMicrophones() {
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        availableMicrophones = discoverySession.devices
     }
 
     private func updateLoginItem(enabled: Bool) {

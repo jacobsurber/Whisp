@@ -7,10 +7,15 @@ internal class AppSetupHelper {
     static func setupApp() {
         // Only set activation policy if NSApp is available (not in unit tests)
         if Thread.isMainThread && NSApplication.shared.delegate != nil {
-            NSApplication.shared.setActivationPolicy(.accessory)
+            applyDockIconVisibility()
         }
         setupLoginItem()
         ensurePromptFiles()
+    }
+
+    static func applyDockIconVisibility() {
+        let showDockIcon = UserDefaults.standard.bool(forKey: AppDefaults.Keys.showDockIcon)
+        NSApplication.shared.setActivationPolicy(showDockIcon ? .regular : .accessory)
     }
     
     static func setupLoginItem() {
